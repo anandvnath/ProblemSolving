@@ -23,7 +23,7 @@ import java.util.*;
  * ]
  * Output: 4
  */
-public class CutBySlash {
+public class CutBySlash959 {
   private Map<String, List<String>> adj = new HashMap<>();
   private Set<String> visited = new HashSet<>();
 
@@ -104,14 +104,5 @@ public class CutBySlash {
   private void connect(String v, String w) {
     adj.computeIfAbsent(v, (k) -> new ArrayList<>()).add(w);
     adj.computeIfAbsent(w, (k) -> new ArrayList<>()).add(v);
-  }
-
-  public static void main(String[] args) {
-    System.out.println(new CutBySlash().regionsBySlashes(new String[]{"/"})); // 2
-    System.out.println(new CutBySlash().regionsBySlashes(new String[]{"\\"})); // 2
-    System.out.println(new CutBySlash().regionsBySlashes(new String[]{" "})); // 1
-    System.out.println(new CutBySlash().regionsBySlashes(new String[]{"\\/", "/\\"})); // 4
-    System.out.println(new CutBySlash().regionsBySlashes(new String[]{"/\\", "\\/"})); // 5
-    System.out.println(new CutBySlash().regionsBySlashes(new String[]{"//", "/ "})); // 3
   }
 }
