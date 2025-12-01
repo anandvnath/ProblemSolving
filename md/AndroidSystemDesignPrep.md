@@ -109,9 +109,6 @@ _POST is not idempotent, but there can be cases you have to retry_. How do we ha
 
 _REST uses rate limiting and throttling headers_. They provide error code `429 Too Many Requests` and also `Retry After` header
 
-### Websocket
-[Explored in real time comms.](#websocket1)
-
 ### GraphQL
 GraphQL is a query language that provides data in the format that the client wants using a single structured query. Instead of separate REST calls to fetch data, client can use a single end point and send a query on what data it wants.
 ```
@@ -141,18 +138,16 @@ From Android standpoint, it simplifies the network stack as there is only one en
 
 To integrate GraphQL in Android app, integrate `apollographql` dependency, define `.graphql` query files. Apollo generates kotlin models after which use `ApolloClient` to connect to server and execute query, get the result. Internally Apollo handles caching, retries, OkHttp integration.
 
-### gRPC
-Already explored in real time comms.
+### Websocket
+[Explored in real time comms.](#websocket-1)
 
-Underlying impl of each of these to some detail
-Timeouts, Configurations, ping frequency etc.
-Encrypted connections
+### gRPC
+[Explored in real time comms.](#grpc-1)
 
 ## Real time updates
 
-+---------------------------+---------------------------+
 |      Technique            |     Type / Notes          |
-+---------------------------+---------------------------+
+|---------------------------|---------------------------|
 | FCM Push Notifications    | Server→device push        |
 | Short Polling             | Repeated periodic HTTP    |
 | Long Polling              | Hold HTTP request open    |
@@ -162,14 +157,11 @@ Encrypted connections
 | MQTT                      | Lightweight pub/sub       |
 | GraphQL Subscriptions     | Real-time GraphQL events  |
 | WorkerManager periodic    | Polling when app stopped  |
-|---------------------------|---------------------------|
-|                       Not explored                    |
-|---------------------------|---------------------------|
+|    **Not explored** |       
 | Socket.IO                 | WebSocket + fallbacks     |
 | PubNub / Ably / Pusher    | Hosted real-time channels |
 | Firebase Realtime DB      | Built-in real-time sync   |
 | Firestore Listeners       | Built-in change streams   |
-+---------------------------+---------------------------+
 
 
 ### Push Notification (FCM - Firebase cloud messaging)
