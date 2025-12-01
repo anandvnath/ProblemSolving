@@ -81,11 +81,13 @@ Design of backend end points and data exchange should be clear.
 ### HTTP based REST
 HTTP explored in a later section entirely. REST uses HTTP.
 
-Although HTTP is action oriented (GET, PUT, POST etc), REST is resource oriented. `/users/{id}`, `/payments` etc.
+Although HTTP is action oriented (GET, PUT, POST etc), REST is resource oriented. `/users/{id}`, `/payments` etc. REST can work on a variety of payloads such as JSON, XML, YAML, HTML, protobuf etc. 
 
-REST can work on a variety of payloads such as JSON, XML, YAML, HTML, protobuf etc. REST over HTTP is stateless. This means that every request should contain context such as auth token, pagination details, resourse identifiers. REST uses HTTP headers and error codes. REST does not support stream, push or bidrectional comms. 
+_REST over HTTP is stateless_. This means that every request should contain context such as auth token, pagination details, resourse identifiers. REST uses HTTP headers and error codes. REST does not support stream, push or bidrectional comms. 
 
-REST cannot provide granular data fetch like GraphQL, so sometime you fetch more data than you actually need depending on the API design. So if you need to know if something changed or updated, you may end up calling the API and downloading the whole payload even if its unchanged. This can be avoided by using techniques such as `eTag`. `eTag` is simply a hashcode that is returned for a specific response. Client can then send this back in  `If-None-Match` header. Now server may respond with `304 Not Modified` or with new data and a new `eTag`. This can be used for implementing optimistic concurrency for updates as well. Suppose `eTag: v2` was sent by server. Client can then say `PUT order/123, If-Match: v2`. If the version does not match, error `412 Precondition Failed` is recieved.
+_REST cannot provide granular data fetch_ like GraphQL, so most of the time you fetch more data than you actually need depending on the API design. So if you need to know if something changed or updated, you may end up calling the API and downloading the whole payload even if its unchanged. 
+
+_This can be avoided by using techniques such as `eTag`_. `eTag` is simply a hashcode that is returned for a specific response. Client can then send this back in `If-None-Match` header. Now server may respond with `304 Not Modified` or with new data and a new `eTag`. This can be used for implementing optimistic concurrency for updates as well. Suppose `eTag: v2` was sent by server. Client can then say `PUT order/123, If-Match: v2`. If the version does not match, error `412 Precondition Failed` is recieved.
 
 REST also provides `Cache-Control` header which specifies if the response can be cached by the client / CDN or cannot be cached. 
 
@@ -93,17 +95,19 @@ Idempotency is a key constraint in REST. Client may end up calling the same API 
 
 REST depends on HTTP semantics:
 
-GET	-> Read-only ->	Safe + Idempotent
-PUT	-> Replace resource ->	Idempotent
-PATCH	-> Partial update	-> Not necessarily idempotent
-DELETE	-> Remove resource	-> Idempotent
-POST	-> Non-idempotent create or action	-> Not idempotent
+| HTTP Method | Purpose / Behavior        | Idempotent?                |
+|-------------|----------------------------|-----------------------------|
+| **GET**     | Read-only                  | ✔ Safe + Idempotent        |
+| **PUT**     | Replace entire resource    | ✔ Idempotent               |
+| **PATCH**   | Partial update             | ❌ Not necessarily idempotent |
+| **DELETE**  | Remove resource            | ✔ Idempotent               |
+| **POST**    | Create / action / side-effects | ❌ Not idempotent       |
 
-What does it mean to be PUT and DELETE to be idempotent? It is idempotent from a single client's perspective. Even if client calls PUT or DELETE on same resource with same payload multiple times, the state on server is exactly the same. But if there are two clients PUT ing same resource, the last one wins.
+_What does it mean to be PUT and DELETE to be idempotent?_ It is idempotent from a single client's perspective. Even if client calls PUT or DELETE on same resource with same payload multiple times, the state on server is exactly the same. But if there are two clients PUT ing same resource, the last one wins.
 
-POST is not idempotent, but there can be cases where due to network issues, you have to retry. Say we have payment of 100 made. If we send this mutliple times, it will end up adding as many payments. This can be solved by using an `Idempotency-Key`. Idea is similar to `eTag` but this time, client owns the hash. 
+_POST is not idempotent, but there can be cases you have to retry_. How do we handle this situation? Say we have payment of 100 made. If we send this mutliple times, it will end up adding as many payments. This can be solved by using an `Idempotency-Key`. Idea is similar to `eTag` but this time, client owns the hash. 
 
-REST uses rate limiting and throttling headers. They provide error code `429 Too Many Requests` and also `Retry After` header
+_REST uses rate limiting and throttling headers_. They provide error code `429 Too Many Requests` and also `Retry After` header
 
 ### Websocket
 Already explored in real time comms.
