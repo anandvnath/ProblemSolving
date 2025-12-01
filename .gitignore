@@ -1,1 +1,4 @@
 target
+*/**/.jar
+.DS_Store
+*/**/.DS_Store
