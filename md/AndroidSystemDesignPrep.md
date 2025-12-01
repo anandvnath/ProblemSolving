@@ -276,28 +276,23 @@ Similarly the automatic reconnection does not work in Android. Its supported by 
 Although SSE transmits plain text, when using HTTPS its encrypted by TCP/TLS layers. SSE is nothing but an HTTP call.
 
 ### gRPC
-
 gRPC stands for google RPC. It is a high perf, strongly typed, binary RPC framework created by Google. It is designed for microservices, mobile to backend comms, low-latency real-time systems.
 
-gRPC uses protocol buffers (protobuf) to define API schema, serializing data to compact bnary and generating strongly typed client/server code.
-This is similar to old style RPC where marshalling and unmarshalling is done across client and server.
-
-gRPC uses HTTP/2 under the hoods including mutiplexing, header compression, persistent connections and bidirectional streaming features.
-
-gRPC makes network calls look like normal local function calls (similar to skeleton and stub concept in RPC). 
+gRPC uses protocol buffers (protobuf) to define API schema, serializing data to compact binary and generating strongly typed client/server code. The concept is similar to old style RPC where marshalling and unmarshalling is done across client and server, but client feels like they are invoking a local function.
 
 gRPC suppots 4 modes of communiacation. 
-    - Unary - single request response model
-    - Server streamin - where client sends one request and sever streams multiple responses. Useful for live status, log stream, continuous results, info notifications.
-    - Client streaming - Client sends a stream and server replies once. Used for file upload, batch upload logs etc. 
-    - Bidirectional streaming - Both sides send streams independently. Useful for chat, live multiplayer gane, real-time collab etc.
+- Unary → single request response model
+- Server streaming → where client sends one request and sever streams multiple responses. Useful for live status, log stream, continuous results, info notifications.
+- Client streaming → Client sends a stream and server replies once. Used for file upload, batch upload logs etc. 
+- Bidirectional streaming → Both sides send streams independently. Useful for chat, live multiplayer gane, real-time collab etc.
 
 Android uses Java/Kotlin gRPC library. Define `.proto` file, add gradle plugins. This generates stubs for RPC methods and then use this for making calls. 
 
-Since gRPC uses HTTP/2 internally, it is encrypted (TLS), multiplexed, binary efficient protocol (faster than JSON REST), provides strong typing and streaming support all in one.
+Since gRPC uses HTTP/2 internally, it is encrypted (TLS), multiplexed, binary efficient protocol (faster than JSON REST), provides strong typing, presistent connections and bidirectional streaming support all in one.
 
-gRPC currently uses HTTP/2. gRPC over HTTP/3 is evolving, but not yet common in Android.
+gRPC over HTTP/3 is evolving, but not yet common in Android.
 
+```
 gRPC (API layer)
 ↓
 HTTP/2 (application)
@@ -305,13 +300,17 @@ HTTP/2 (application)
 TLS (presentation & session = encryption)
 ↓
 TCP (transport)
+```
 
 ### MQTT
 Message Queing Telemetry Transport. This is a lightweight, pub-sub messaging protocol built on top of TCP, designed for real time communication, especially over unrealiable and low-bandwidth networks. This is widely used on IOT devices, sensors, chat apps and mobile apps.  In this the client connects to a central broker and publish or subscribe to named topics for real-time message delivery. MQTT scales to millions of connections 
 
-MQTT works well on low power devices, unstable networks, intermittent connectivity, minimal bandwidth. MQTT packets are as smallas 2 bytes. There are no headers, no additonal TLS, no cookies, no req / resp. Its just one long TCP session. Only limited packet types and minimal fields. MQTT broker maintains the client id, subscription list, QoS state and pending offline messages. The client can reconnect instantly after a drop. It scales horizontally by adding more brokers and each broker handling thousands of TCP connections, highly optimized IO, fan-out optimization etc. Other standard geo distributes clustering strategies can be used.
+MQTT works well on low power devices, unstable networks, intermittent connectivity, minimal bandwidth. MQTT packets are as small as 2 bytes. There are no headers, no additonal TLS, no cookies, no req / resp. Its just one long TCP session. Only limited packet types and minimal fields. MQTT broker maintains the client id, subscription list, QoS state and pending offline messages. The client can reconnect instantly after a drop. It scales horizontally by adding more brokers and each broker handling thousands of TCP connections, highly optimized IO, fan-out optimization etc. Other standard geo distributes clustering strategies can be used.
 
-MQTT has its own protocol written on TCP, and it has a broker which recieves messages, routes them to subscribers and maintains client session. It also provides QoS of 0 - at most once, 1 - at least once or 2 - exactly once (most costly) guarantees.
+MQTT has its own protocol written on TCP, and it has a broker which recieves messages, routes them to subscribers and maintains client session. It also provides QoS of:
+- 0 → at most once
+- 1 → at least once or 
+- 2 → exactly once (most costly) guarantees.
 
 #### How to use MQTT in an Android chat app?
 MQTT works well when app is in foreground. But must have fallback mechanism when app goes to background.
@@ -320,14 +319,19 @@ Initially app connects to MQTT broker and subscribes to topics such as `chat/<us
 
 When app goes to background, TCP connection is killed during doze mode. App cannot keep MQTT running, broker will see client disconnect. messages will queue up. So MQTT should pair up with FCM to push silent notifications to periodically connect back to the broker and sync messages (and post a custom notification). There is an interesting concept called `Last will message`. This is registed by the client on the broker when it connects. When broker finds a client has dropped, it publishes that `Last will message` to some topic like `presence/<userid>/status`. Backend can subscribe to this and determine when to send the FCM push.
 
+#### How MQTT handles large files and attachments?
+
 MQTT message are kept small. Mostly < 64kb. They do not have large files or images, instead they contain metadata. App users HTTPS to get to the attachment and files when needed.
 
+```
 User uploads media → Backend stores in S3/CDN → MQTT publishes message metadata → Receiver gets MQTT → App fetches media via HTTPS
+```
 
-MQTT support TLS, so end to end communication is encrypted. MQTT supports TLS based auth using certificates as explained in TLS 1.3 in HTTP section. It also supports mutual TLS where client can also send a certificate which is verified by the broker. Second way is usoing username and password. Password can be text which is discouraged, can be JWT token or OAith token that is short lived. It can also do token based auth. Once auth'ed broker creates a clientid and creates a persistent session by using a heartbeat. For network drops, MQTT does a TCP fast reconnect by using minimum formalities.
+### MQTT uses TCP, is it secure?
+MQTT implements its own TLS, so end to end communication is encrypted. MQTT supports TLS based auth using certificates as [explained in TLS 1.3 in HTTP section](#about-tls). It also supports mutual TLS where client can also send a certificate which is verified by the broker. Second way is using username and password. Password can be text which is discouraged, can be JWT token or OAith token that is short lived. It can also do token based auth. Once auth'ed broker creates a clientid and creates a persistent session by using a heartbeat. For network drops, MQTT does a TCP fast reconnect by using minimum formalities.
 
 ### GraphQL subscriptions
-See GraphQL section for basic details.
+[See GraphQL section](#graphql) for basic details.
 A sample subscription for a chat whenever a message is added to chatId 123 is as follows:
 
 ```
@@ -351,15 +355,15 @@ The limitation here is that this works only when app is in foreground.
 
 BLE stands for Bluetooth Low Energy. This are really low cost way to push events from a BLE device. Android app can connect to BLE device and subscribe to a characteristic. BLE pushes a notification when its value changes. App recieves `onCharacteristicChanged()`.
 
-If one wants to access BLE device from their app, they should start off with asking for permissions to scan and connect bluetooth and location. WIth this app can use `BluetoothAdapter` and related API along with `LocationManager` to scan for BLE devices. Once device is idenfied use `connectGatt` to connect and then impelment a callback `BluetoothGattCallback` to recieve callbacks on connection, service discovery, read,write and notification events.
+If one wants to access BLE device from their app, they should start off with asking for permissions to scan and connect bluetooth and location. With this app can use `BluetoothAdapter` and related API along with `LocationManager` to scan for BLE devices. Once device is idenfied use `connectGatt` to connect and then impelment a callback `BluetoothGattCallback` to recieve callbacks on connection, service discovery, read,write and notification events.
 
 ### Workmanager periodic workers
 
 
 ### Summary of network stack
-| WebSocket                    | SSE      |        GraphQL       | gRPC         | MQTT                      |
+| WebSocket | SSE | GraphQL  | gRPC | MQTT |
 |-|-|-|-|-|
-| HTTP/1 only for upgrade,<br> TLS + TCP <br> No HTTP/2 (No upgrade) <br> No HTTP/3 (has WebTransport)  | HTTP1/2 | HTTP 1/2/3 <br> WebSocket or SSE for subscription | HTTP2 only | TCP - Implements own TLS |
+| HTTP/1 only for upgrade,<br> TLS + TCP <br> No HTTP/2 (No upgrade) <br> No HTTP/3 (has WebTransport)  | HTTP/1/2 | HTTP 1/2/3 <br> WebSocket or SSE for subscription | HTTP/2 only | TCP - Implements own TLS |
 
 ## HTTP
 
@@ -369,20 +373,28 @@ HTTP is not directly responsible for reliability, ordering, encryption etc. It u
 HTTP is a language spoken between apps. It defines a request and response format. 
 
 Request format:
+```
 GET /profile HTTP/1.1
 Host: example.com
 User-Agent: Chrome
 Accept: application/json
-
+```
 Response format:
+```
 HTTP/1.1 200 OK
 Content-Type: application/json
 Content-Length: 42
 {"name": "Anand", "role": "Android dev"}
-
+```
 HTTP supports several methods: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS etc
-HTTP has several statys codes: 2xx success, 4xx client error, 5xx server error.
+HTTP has several statys codes: 
+- 1xx → informational
+- 2xx → success variants
+- 3xx → redirection 
+- 4xx → client error 
+- 5xx → server error
 
+```
 HTTP/2 (application)
 ↓
 TLS (presentation / encryption)
@@ -390,32 +402,47 @@ TLS (presentation / encryption)
 TCP (transport)
 ↓
 IP (network)
+```
 
 ### HTTP/1.x vs HTTP/2?
-HTTP2 supports multiplexing. Which means that in single TCP connection, we can send multiple requests. 
-HTTP2 provided support for Server push, which is now deprecated. This allowed server to push to client without request. But this had inherent issues over resource consumption.
-Lesser and faster shake hands. Also requests does not block on each other. 
+HTTP/2 supports multiplexing. Which means that in single TCP connection, we can send multiple requests. Results in lesser and faster shake hands. Requests do not block on each other (no HoL at HTTP level). 
+
+HTTP/2 provided support for `Server push`, which is now deprecated. This allowed server to push to client without request. But this had inherent issues over resource consumption.
 
 For Android, OKHttp is multiplexing enabled by default. This can be disabled explicitly by setting protocols while creating the client to use only HTTP_1_1
 
-Every HTTP1 connection needs to open TCP connection. Browsers work with 6 to 10 TCP connections in parallel, OKHttp has 5 as default. But more TCP connections results in more handshakes, more memory consumption. 
-HTTP2 connection works on single TCP connection and then multiplexing inside that. HTTP/2 does this by switching to binary format from text in HTTP/1. Internally it splits comms into streams, each stream contains messages, and each message contains frames. TCP does not know about this. HTTP2 does this at both ends. So if there is a packet lost, HoL kicks in for TCP and all streams are affected. It uses ALPN to avoid extra round trip to determine the protocol for communication.
-HTTP3 is coming up with QUIC protocol (which itself runs on UDP) which removes TCP level HoL also. 
+Every HTTP/1 connection needs to open TCP connection. Browsers work with 6 to 10 TCP connections in parallel, OKHttp has 5 as default. But more TCP connections results in more handshakes, more memory consumption. 
+
+HTTP/2 connection works on single TCP connection and then multiplexing inside that. HTTP/2 does this by switching to binary format from text in HTTP/1. Internally it splits comms into streams, each stream contains messages, and each message contains frames. TCP does not know about this. HTTP/2 does this at both ends. So if there is a packet lost, HoL kicks in for TCP and all streams are affected. 
+
+HTTP/2 uses ALPN to avoid extra round trip to determine the protocol for communication.
+
+HTTP/3 is coming up with QUIC protocol (which itself runs on UDP) which removes TCP level HoL also. 
 
 #### Head of Line blocking (HoL)
-A previous slower request does not hold a following quick request at ransom. They happen in parallel. The phenomenon where requests wait is called "Head of Line" blocking. For HTTP/2 HoL is a non issue in HTTP layer. In TCP layer HoL still happens. This is significant advantage for HTTP/2 because TCP layer HoL happens only when packets are lost. TCP delivers a byte stream. If some packet is lost, then recieving side must wait. But later packets already arrived, they are stuck behind the missing packet.
+A previous slower request holds a following quick request at ransom. The phenomenon where requests wait is called "Head of Line" blocking. TCP delivers a byte stream. If some packet is lost, then recieving side must wait. But later packets already arrived, they are stuck behind the missing packet and the flow proceeds.
+
+For HTTP/2 HoL is a non issue in HTTP layer. In TCP layer HoL still happens. This is significant advantage for HTTP/2 because TCP layer HoL happens only when packets are lost. 
 
 ### About ALPN
 Application Layer Protocol Negotiation. This helps in agreeing upon which protocol to use (like HTTP/1.1, HTTP/2, gRPC etc.)
+
 Without ALPN, client sends a spcial upgrade header in first request and from that server understands. This needs extra round trip. It could not work with encrypted HTTP/2 as server could not peek inside TLS.
 
 In ALPN, in the initial request itself client sends a list of protocols that it can support ["http/1.1", "h2"] and server picks one and reponds when it sends the public key and it is settled.
 
 ### About TCP
-TCP is a low level network protocol for communication. It starts with 3 way handshake (SYN (c to s)->SYN-ACK (s to c)->ACK (c to s)). This ensures that the both sides can send and recieve. TCP is stateful, reliable, ordered and deterministic connection. Both client and server maintains state. The packets are transmitted in a certain order and assembled in same order at reciever side. Missing packets are re-transmitted and uses TCP HoL blocking while missing packet arrives.
-Used by all HTTP, TLS, WebSocket, Git, SSH etc.
+TCP is a low level network protocol for communication. It starts with 3 way handshake.
+
+```
+SYN (c to s)→ SYN-ACK (s to c) → ACK (c to s)
+```
+
+This ensures that the both sides can send and recieve. TCP is stateful, reliable, ordered and deterministic connection. Both client and server maintains state. The packets are transmitted in a certain order and assembled in same order at reciever side. Missing packets are re-transmitted and uses TCP HoL blocking while missing packet arrives.
 
 Reliability and retransmission happens based on the ACK signal that client sends. If server did not recieve the ACK with the seq num, then it sends the packet again.
+
+Used by all HTTP, TLS, WebSocket, Git, SSH etc.
 
 TLS is an encryption layer on top of TCP. The stack is HTTP -> TLS -> TCP -> IP
 
@@ -423,22 +450,25 @@ TLS is an encryption layer on top of TCP. The stack is HTTP -> TLS -> TCP -> IP
 UDP is a stateless, fire and forget kind of connection. There is no inherent reliability or order guarantees. This means UDP can be much faster, and useful where packet loss is not a major concern. Useful in WebRTC, Video streaming, VoIP, Games, DNS lookup etc.
 
 ### About TLS
-Transport Layer Security gives HTTPS its 3 guarantees: Encryption (attacker cannot read data), Integrity (attacker cannot modify data), Auth (communication is from a real server and not a fake one). TLS runs on top of TCP.
+Transport Layer Security gives HTTPS its 3 guarantees: 
+- Encryption (attacker cannot read data)
+- Integrity (attacker cannot modify data)
+- Auth (communication is from a real server and not a fake one). 
+
+TLS runs on top of TCP.
 
 #### TCP + TLS 1.3 handshakes
-TCP needs 3 way handshake SYN (c to s)->SYN-ACK (s to c)->ACK (c to s)
-TLS needs Client (random + ALPN) to Server -> Server (random + protocol selection + new asymmetric public key / certificate encrypted with long term public key) -> Client (after validating with root CA or pinned CA, secret random encrypted with public key) -> Server and Client (Finished encryption) 
-This can be summarized as ClientHello -> ServerHello -> Secret sharing -> Finished encryption.
+TCP needs 3 way handshake 
 
-#### Symmetric and Asymmetric keys
-Asymmetric keys are public, private pairs. Private key is the key that can open the mailbox and public key is like the location of the mailbox. This method is slow, but security is very strong. This is typically used for exchanging keys or verifying identities. Clients use this to encrypt their pre-master secret (which is a symmetric key). 
+```
+SYN (c to s) → SYN-ACK (s to c) → ACK (c to s)
+```
 
-A symmetric key is when both sides use same secret key. Whoever has key can encrypt as well as decrypt. This is very fast and has strong securty (AES-128, AES-256) and is used for bluk data encryption.
+TLS does this in addition:
 
-#### TLS record protocol
-Client starts comms by sending supported TLS version, cipher suites, client random number, ALPN (HTTP protocol negotiation)
-Server sends TLS certificate chain, public key, cipher selection, server random number.
-Client has to decide if certificate is trustworthy using client validation. It does so using domain match, expiry, chain or trust (server cert -> intermediate cert -> root cert). Root cert must already exist in client's trust store. It also checks the certificate signature. If certificate is modified, then signature becomes invalid. (sort of a SHA?)
+Client starts comms by sending supported TLS version, protocol suites, client random number, ALPN (HTTP protocol negotiation)
+Server sends TLS certificate chain, public key, protocol selection, server random number. The public key is encrypted using the servers long term public key (which is typically client pinned or root CA)
+Client has to decide if certificate is trustworthy using client validation. It does so using domain match, expiry, chain or trust (server cert -> intermediate cert -> root cert). Root cert must already exist in client's trust store. It also checks the certificate signature. If certificate is modified, then signature becomes invalid. 
 
 Android uses system trust store (OEM managed) or app-added certs to store the root cert.
 
@@ -446,7 +476,7 @@ After cert validation, client generates a pre-master secret (random number). Cli
 
 ```
 Client Hello  ——>  (supported ciphers, client random, SNI)
-              <——  Server Hello (server random, chosen cipher)
+              <——  Server Hello (server random, chosen protocol)
               <——  Certificate (server public key)
               <——  Certificate Verify
 Key Exchange (client encrypts pre-master with server public key)
@@ -456,20 +486,32 @@ Server Finished <—— (encrypted)
              <——/——>  Encrypted HTTP payload
 
 ```             
+
+This can be further summarized as:
+
+```
+ClientHello -> ServerHello -> Secret sharing -> Finished encryption.
+```
+
 #### Prefect forward secrecy (PFS)
 This is supported in TLS 1.3 which generates a private key at the server per session. This way old private keys, if leaked somehow, cannot be used to decrypt old encrypted comms.
 
 There are 2 set of keys. One is a long term key and one is ephimeral pair to exchange secrets. The ephimeral one is generated every handshake. So what actually happens is that server sends the long term public key and an ephimeral public key which is encrypted with the long term public key. So that client knows its server who is sending this ephimeral public key. These session keys are the ones destroyed after each session. The ephimeral key only serves to exchange secret from client to server. After that all comms use symmetric keys (secret)
 
+#### Symmetric and Asymmetric keys
+Asymmetric keys are public, private pairs. Private key is the key that can open the mailbox and public key is like the location of the mailbox. This method is slow, but security is very strong. This is typically used for exchanging keys or verifying identities. Clients use this to encrypt their pre-master secret (which is a symmetric key). 
+
+A symmetric key is when both sides use same secret key. Whoever has key can encrypt as well as decrypt. This is very fast and has strong securty (AES-128, AES-256) and is used for bluk data encryption.
+
 ### About QUIC
-QUIC protocol is used with HTTP 3. Its a transport layer developed by Google. Its a modern replacement for TCP + TLS, built on top of UDP. It provides key features like Multiplexing, congestion control, encryption, faster handshake, anti-HoL blocking, connection mitigation.
+QUIC protocol is used with HTTP/3. Its a transport layer developed by Google. Its a modern replacement for TCP + TLS, built on top of UDP. It provides key features like multiplexing, congestion control, encryption, faster handshake, anti-HoL blocking, connection mitigation.
 
 QUIC works on a connection ID and does not depend on IP address, port or network interface. This way switching network from wifi to 4G does not affect QUIC communication.
 
 HTTP/3 has semantics over QUIC instead of TCP. This is supported in modern browsers and CDNs. For Android support is experimental in OkHttp. Supported for gRPC over HTTP/3. Apps like Search, Gmail, Youtube uses QUIC.
 
-#### How QUIC does TLS 1.3 in 1 RTT?
-QUIC integrates TLS 1.3 inside its handshake, exact 3-4 steps, but done in 1 round trip time (RTT)! Faster 0-1 RTT handshake as compared to 2 RTT for TCP.
+#### How QUIC do TLS 1.3 in 1 RTT?
+QUIC integrates [TLS 1.3 inside its handshake](#tcp--tls-13-handshakes), exact 3-4 steps, but done in 1 round trip time (RTT)! Faster 0-1 RTT handshake as compared to 2 RTT for TCP.
 
 The reason is that in case of TCP, its own handshake takes 1 RTT, at which point TLS is blocked. Client cannot send ClientHello unless the TCP handshake is done. But in case of QUIC, TCP handshake is avoided.
 
@@ -486,28 +528,15 @@ QUIC uses UDP which does not have any guarantees on delivery or order. QUIC impl
 TCP lives in the kernel and changing that takes years. QUIC is in user space and does not need kernel changes. Means QUIC is implemented in the application layer and not in kernel layer. It just uses UDP functionality from the kernel.
 
 ### HTTP Layering
-
-+------------------------------------------------------------------------------------------------------------------------+
-| LAYER / STACK             |            HTTP/1.1               |             HTTP/2               |       HTTP/3        |
-|---------------------------+-----------------------------------+----------------------------------+---------------------|
-| Layer 7  Application      |  REST, JSON APIs, GraphQL, HTML   |  REST, gRPC, GraphQL, HTML       |  REST, GraphQL      |
-|                           |                                   |  (gRPC requires HTTP/2)          |                     |
-|---------------------------+-----------------------------------+----------------------------------+---------------------|
-| Layer 6  Presentation     |  TLS (HTTPS)                      |  TLS (HTTPS)                     |  TLS inside QUIC    |
-|                           |  separate from TCP                |  separate from TCP               |  (NOT separate)     |
-|---------------------------+-----------------------------------+----------------------------------+---------------------|
-| Layer 5  Session          |  HTTP/1.1 connection + keepalive  |  HTTP/2 Streams (multiplexing)   |  QUIC Streams       |
-|                           |  No multiplexing                  |  HPACK header compression        |  Multiplexing       |
-|                           |                                   |                                  |  Connection IDs     |
-|---------------------------+-----------------------------------+----------------------------------+---------------------|
-| Layer 4  Transport        |                                   TCP                                |         UDP         |
-|---------------------------+-----------------------------------+----------------------------------+---------------------|
-| Layer 3  Network          |                                  IP (IPv4 / IPv6)                                          |
-|---------------------------+--------------------------------------------------------------------------------------------|
-| Layer 2  Data Link        |                              Wi-Fi, Ethernet, LTE/5G, etc.                                 |
-|---------------------------+--------------------------------------------------------------------------------------------|
-| Layer 1  Physical         |                             Radio waves, fiber, copper, etc.                               |
-+------------------------------------------------------------------------------------------------------------------------+
+| LAYER / STACK | HTTP/1.1 | HTTP/2 | HTTP/3 |
+|-|-|-|-|
+| Layer 7 Application | REST, JSON APIs, GraphQL, HTML | REST, gRPC (requires HTTP/2), GraphQL, HTML | REST, GraphQL |
+| Layer 6 Presentation | TLS (HTTPS), separate from TCP  | TLS (HTTPS), separate from TCP  | TLS inside QUIC (NOT separate) |
+| Layer 5 Session | HTTP/1.1 connection + keepalive | HTTP/2 Streams (multiplexing) | QUIC Streams, Multiplexing |
+| Layer 4 Transport | TCP | TCP | UDP |
+| Layer 3 Network | IP (IPv4 / IPv6) |
+| Layer 2 Data Link | Wi-Fi, Ethernet, LTE/5G, etc. |
+| Layer 1 Physical | Radio waves, fiber, copper, etc. |
 
 
 ### Root certificates
@@ -516,32 +545,27 @@ Location: `/system/etc/security/cacerts_google`
 
 #### Certificate PINNING in Android
 If an app wants to add additional trust CAs, then they can PIN certificates or trust only specific CAs, add user CAs or ignore system CAs totally.
+
 Use can also install extra root CAs in location `/data/misc/keychain/certs-added`. These are not trusted by default apps. They are trusted only if apps opt in.
 
 Normally HTTPs trusts all root CAs. But if an app wants, it can pin certain CAs which it wants and only those certs are trusted for that app's HTTPS comms. So even if there is a mallicious root CA that user installed or wifi provider inserts a proxy or a global CA is compromized, the app wont be affected. Pinning is simply overriding default trust CAs for a particular app (mainly to narrow it down).
 
-There are many options to pin entire certificate, or only public key or an intermediary certificate. Pinning public key is more popular as it allows cert rotation without breaking pin. App can also pin multiple keys for fallback. (say current key and next key, before removing the current one, so that both will work for some time.)
+Pinning public key is more popular as it allows cert rotation without breaking pin. App can also pin multiple keys for fallback. (say current key and next key, before removing the current one, so that both will work for some time.)
 
-Pinning can be done by XML based `network-security-config` where you put in the public key as base 64 encoded string or in code by using OKHttpClient's `CertificatePinner` while setting up a client.
+Pinning can be done in an app via XML `<network-security-config>` setting where you put in the public key as base 64 encoded string OR in code by using OKHttpClient's `CertificatePinner` while setting up a client.
 
 During TLS handshake, after normal certificate validation succeeds, the app additionally checks the certificate or public key against its pins. If they don’t match, the connection fails. Pinning protects against MITM attacks, compromised CAs, and user-installed root certificates, but requires careful key rotation planning.
 
 ### 7 layer network model
-+---------------------------------------------------------------------+
-| Layer 7  Application        |    HTTP (REST, gRPC, WebSockets)      |
-+---------------------------------------------------------------------+
-| Layer 6  Presentation       |    TLS/SSL (encryption)               |
-+---------------------------------------------------------------------+
-| Layer 5  Session            |    TLS session, sockets               |
-+---------------------------------------------------------------------+
-| Layer 4  Transport          |    TCP   or   UDP (for QUIC/HTTP3)    |
-+---------------------------------------------------------------------+
-| Layer 3  Network            |    IP (IPv4/IPv6)                     |
-+---------------------------------------------------------------------+
-| Layer 2  Data Link          |    Wi-Fi, Ethernet, LTE/5G            |
-+---------------------------------------------------------------------+
-| Layer 1  Physical           |    Radio waves, fiber optics, wires   |
-+---------------------------------------------------------------------+
+| Layer| Description |
+|-|-|
+| Layer 7 Application | HTTP (REST, gRPC, WebSockets) |
+| Layer 6 Presentation | TLS/SSL (encryption) |
+| Layer 5 Session | TLS session, sockets |
+| Layer 4 Transport | TCP or UDP (for QUIC/HTTP/3) |
+| Layer 3 Network | IP (IPv4/IPv6) |
+| Layer 2 Data Link | Wi-Fi, Ethernet, LTE/5G |
+| Layer 1 Physical | Radio waves, fiber optics, wires |
 
 ## XMPP
 
