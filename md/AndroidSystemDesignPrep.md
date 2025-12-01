@@ -150,11 +150,11 @@ To integrate GraphQL in Android app, integrate `apollographql` dependency, defin
 
 |      Technique            |     Type / Notes          |
 |---------------------------|---------------------------|
-| FCM Push Notifications    | Server→device push        |
+| FCM Push Notifications    | Server → device push using google services |
 | Short Polling             | Repeated periodic HTTP    |
-| Long Polling              | Hold HTTP request open    |
-| Server-Sent Events (SSE)  | One-way server→client     |
-| WebSockets                | Full-duplex persistent    |
+| Long Polling              | Long lived HTTP request, client initiated, keep alive and high read timeout |
+| WebSockets                | Full-duplex persistent connection, HTTP initiated as upgrade, converted to 2 way binary stream on TCP, ping pong heartbeat. |
+| Server-Sent Events (SSE)  | One-way server → client, client initiated, kept alive using heartbeat, client reconnects when dropped, client listens to updates. |
 | gRPC Streaming            | HTTP/2 streams, bi-dir    |
 | MQTT                      | Lightweight pub/sub       |
 | GraphQL Subscriptions     | Real-time GraphQL events  |
@@ -212,30 +212,34 @@ Foreground apps, services, high priority push notifications FCM, System apps suc
 This is client specific implementation where client keeps polling server in some interval. A typical implementation is 2s or 5s. 
 Server immediately responds, if there is an update or not. 
 Server load will be high in this case, client battery drain is higher.
-This can work with legacy systems as it does not need any specific support from server side.
+
+This can work with _legacy systems_ as it does not need any specific support from server side.
 This can be used in situations when other realtime updates like notifications / websockets / long polling are not feasible.
 
 ### HTTP Long polling
-In this model client makes a request, server may respond immediately if it has an update. Else it holds the connection and responds when a response is available or the request times out.
-Server load is less than short polling. But still its significant as the connection has to be kept live.
+In this model client makes a request, server may respond immediately if it has an update. Else it holds the connection and responds when a response is available or the request times out. Server load is less than short polling. But it is still significant as the connection has to be kept live.
+
 Once the response arrives, client initiates another long poll request.
+
 This works the same with HTTP/1 or HTTP/2 because the concept remains the same. No change in client or server side specific to HTTP protocol supported. With HTTP/2 we can have multiple long polling requests in a single HTTP/2 TCP connection.
 
 #### How long does the server hold the connection?
 This is mostly server implementation dependent. There is a timeout associated which client can configure. Typically this is anywhere from 15 to 60 seconds.
-In case of Android, we can use network library which can set timeouts like Read timeout which can be increased to let the server know that client is willing to wait.
-Other timeouts associated with network lib are connect timeout, call timeout etc. HTTP header `keep-alive` should also be used.
-There can be server side intermediate layers which support idle connections also like CDNs or API gateways.
-Apart from this, server has to implement the logic to wait until data is available instead of flushing the response prematurely. Here server needs to implement waiting strategies involving non blocking IO and it should support sufficient number of concurrent connnections. Some stregies to hold connections is event loop in Node, Async controllers in Java + Spring boot or similar async frameworks in other languages.
+
+In case of Android, we can use network library which can set timeouts like `Read timeout` which can be increased to let the server know that client is willing to wait. HTTP header `keep-alive` should also be used. 
+
+
+At the server side, there can be intermediate layers which support idle connections also like CDNs or API gateways. _Server has to implement the logic to wait until data is available instead of flushing the response prematurely_. Here server needs to implement waiting strategies involving non blocking IO and it should support sufficient number of concurrent connnections. Some stregies to hold connections is _event loop in Node, Async controllers in Java + Spring boot or similar async frameworks in other languages_.
 
 ### Websocket
 Websockets provide full duplex (back and forth), persistent, low-latency connection between server and client. It works on messages rather than request / response. Its like upgrading HTTP to a pipe where both server and client can talk freely. 
 
 Websockets starts off as an HTTP call. After server responds, they switch protocols. Once websocket is established, there is no more HTTP. 
 
-First client sends an HTTP request with and upgrade request to use websocket. It also passes websocket key and version. 
-Server responds back with an accept HTTP 101 code. After this comms are using websocket frames, using a bidrectional TCP connection.
-Websocket communicates using binary frames. Websockets are long lived TCP connections. It is kept alive by a heart beat once in 30-60 seconds which server sends ping and client responds with a pong.
+First client sends an HTTP request with and `Upgrade` request header to the server, to indicate it wants to switch to websocket. It also passes websocket key and version. 
+Server responds back with an accept `HTTP 101` code. After this comms are using websocket frames, using a bidrectional TCP connection.
+
+Websocket communicates using _binary frames_. Websockets are long lived TCP connections. It is kept alive by a heart beat once in 30-60 seconds which server sends ping and client responds with a pong.
 
 Websocket initialization cannot happens using HTTP/2 as it does not support `Connection: Upgrade` functionality which is the core of establishing websocket connection. 
 
@@ -250,15 +254,19 @@ These are unidirectional, lightweight, simple way for server to push events/mess
 
 Client opens a normal HTTP request, server keeps the connection open forever, server sends events as plain text, client recieves and updates automatically.
 
+```
 GET /events HTTP/1.1
 Accept: text/event-stream
 Cache-Control: no-cache
 Connection: keep-alive
+```
 
+```
 HTTP/1.1 200 OK
 Content-Type: text/event-stream
 Cache-Control: no-cache
 Connection: keep-alive
+```
 
 Server sends periodic heartbeat messages which are ignored by the client. If client is disconnected, it automatically reconnects. 
 
