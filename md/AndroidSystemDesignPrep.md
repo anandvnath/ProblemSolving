@@ -79,7 +79,7 @@ What access levels are possible to storage such as secure, disk, db etc.
 Design of backend end points and data exchange should be clear.
 
 ### HTTP based REST
-HTTP explored in a later section entirely. REST uses HTTP.
+[HTTP explored in a later section entirely](#http). REST uses HTTP.
 
 Although HTTP is action oriented (GET, PUT, POST etc), REST is resource oriented. `/users/{id}`, `/payments` etc. REST can work on a variety of payloads such as JSON, XML, YAML, HTML, protobuf etc. 
 
@@ -95,13 +95,13 @@ Idempotency is a key constraint in REST. Client may end up calling the same API 
 
 REST depends on HTTP semantics:
 
-| HTTP Method | Purpose / Behavior        | Idempotent?                |
-|-------------|----------------------------|-----------------------------|
-| **GET**     | Read-only                  | ✔ Safe + Idempotent        |
-| **PUT**     | Replace entire resource    | ✔ Idempotent               |
-| **PATCH**   | Partial update             | ❌ Not necessarily idempotent |
-| **DELETE**  | Remove resource            | ✔ Idempotent               |
-| **POST**    | Create / action / side-effects | ❌ Not idempotent       |
+| HTTP Method | Purpose / Behavior| Idempotent? |
+|-------------|-------------------|-------------|
+| **GET** | Read-only | ✔ Safe + Idempotent |
+| **PUT** | Replace entire resource | ✔ Idempotent |
+| **DELETE** | Remove resource | ✔ Idempotent |
+| **PATCH** | Partial update | ❌ Not necessarily idempotent |
+| **POST** | Create / action / side-effects | ❌ Not idempotent|
 
 _What does it mean to be PUT and DELETE to be idempotent?_ It is idempotent from a single client's perspective. Even if client calls PUT or DELETE on same resource with same payload multiple times, the state on server is exactly the same. But if there are two clients PUT ing same resource, the last one wins.
 
@@ -110,7 +110,7 @@ _POST is not idempotent, but there can be cases you have to retry_. How do we ha
 _REST uses rate limiting and throttling headers_. They provide error code `429 Too Many Requests` and also `Retry After` header
 
 ### Websocket
-Already explored in real time comms.
+[Explored in real time comms.](#websocket1)
 
 ### GraphQL
 GraphQL is a query language that provides data in the format that the client wants using a single structured query. Instead of separate REST calls to fetch data, client can use a single end point and send a query on what data it wants.
@@ -234,7 +234,7 @@ Other timeouts associated with network lib are connect timeout, call timeout etc
 There can be server side intermediate layers which support idle connections also like CDNs or API gateways.
 Apart from this, server has to implement the logic to wait until data is available instead of flushing the response prematurely. Here server needs to implement waiting strategies involving non blocking IO and it should support sufficient number of concurrent connnections. Some stregies to hold connections is event loop in Node, Async controllers in Java + Spring boot or similar async frameworks in other languages.
 
-### Websockets
+### Websocket
 Websockets provide full duplex (back and forth), persistent, low-latency connection between server and client. It works on messages rather than request / response. Its like upgrading HTTP to a pipe where both server and client can talk freely. 
 
 Websockets starts off as an HTTP call. After server responds, they switch protocols. Once websocket is established, there is no more HTTP. 
