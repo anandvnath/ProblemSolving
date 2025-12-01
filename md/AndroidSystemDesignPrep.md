@@ -110,7 +110,7 @@ _POST is not idempotent, but there can be cases you have to retry_. How do we ha
 _REST uses rate limiting and throttling headers_. They provide error code `429 Too Many Requests` and also `Retry After` header
 
 ### GraphQL
-GraphQL is a query language that provides data in the format that the client wants using a single structured query. Instead of separate REST calls to fetch data, client can use a single end point and send a query on what data it wants.
+_GraphQL is a query language based backend that provides data in the format that the client wants_ using a single structured query. Instead of separate REST calls to fetch data, client can use a single end point and send a query on what data it wants.
 ```
 GET /user/123
 GET /user/123/friends
@@ -130,7 +130,9 @@ POST /graphql
 }
 ```
 
-GraphQL exposes a typed schema. It supports querying for reading data, mutation for updating data, resolvers that are shortcuts to get to join data and subscriptions that are realtime updates over websocket.
+_GraphQL works on top of HTTP_. It uses JSON payload for communication.
+
+_GraphQL exposes a typed schema_. It supports querys for reading data, mutation for updating data, resolvers that are shortcuts to get to join data and subscriptions that are realtime updates over websocket.
 
 At the server side, GraphQL parses the query that client sends, runs resolver functions per field and then returns the fields that client requested.
 
@@ -350,14 +352,9 @@ If one wants to access BLE device from their app, they should start off with ask
 
 
 ### Summary of network stack
-+------------------------------+----------+----------------------+--------------+---------------------------+
 | WebSocket                    | SSE      |        GraphQL       | gRPC         | MQTT                      |
-|------------------------------+----------+----------------------+--------------+---------------------------|
-| HTTP/1 only for upgrade      | HTTP1/2  | HTTP 1/2/3           | HTTP2 only   | TCP - Implements own TLS  |
-| TLS + TCP                    |          | WebSocket for subscr |              |                           |
-| No HTTP/2 (No upgrade)       |          | SSE for subscr       |              |                           |
-| No HTTP/3 (has WebTransport) |          |                      |              |                           |  
-|------------------------------+----------+----------------------+--------------+---------------------------|
+|-|-|-|-|-|
+| HTTP/1 only for upgrade,<br> TLS + TCP <br> No HTTP/2 (No upgrade) <br> No HTTP/3 (has WebTransport)  | HTTP1/2 | HTTP 1/2/3 <br> WebSocket or SSE for subscription | HTTP2 only | TCP - Implements own TLS |
 
 ## HTTP
 
