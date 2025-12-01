@@ -51,7 +51,10 @@ Broadcast receivers
 - Bundles / flavors etc
 ### Binder / IPC
 How to build a separate telemetry / logging APK that can be reused as a service across multuple apps?
+### Doze mode
+Doze mode is an aggressive battery saving state introduced in Android 6. Doze mode progresses from Light to Deep. First when screen of off - no doze yet. Device is stationary -> light doze mode. Then after some time it enters deep doze where CPU sleeps most of the time, network is blocked, work deferred and only maintenance window work happens every 10 - 30 mins (increasing gaps). During this time Android wakes up breifly, runs pending jobs, delivers queued notifications, allows app to sync, re-enters doze mode.
 
+Foreground apps, services, high priority push notifications FCM, System apps such as clock etc are only allowed. There is a maintenance window concept when background tasks are allowed in a short burst every few minutes. Alarms set using `setAndAllowWhileIdle()` kind of API are allowed.
 
 ## Offline support
 - Database - SQLite (other options?)
@@ -169,32 +172,31 @@ To integrate GraphQL in Android app, integrate `apollographql` dependency, defin
 ### Push Notification (FCM - Firebase cloud messaging)
 When an Android app is stopped or killed, it cannot maintain background connections. In such cases, it needs to rely on push delivery mechanism for notifications. This happens through FCM which is Google's push service.
 
+```
 Your Server  →  Firebase Cloud Messaging (FCM)  →  Google Play Services  → Android System  →  Your App (if needed)
+```
 
-When user installs or opens the app, app calls `FirebaseMessaging.getToken()`. Google play service generates unique FCM token for that app+device. App sends this token to backend server. Token can change whenever user reinstall, clear data, update, or due to security rotation. App should update the backend whenever a new token arrives in `onNewToken()` callback.
+When user installs or opens the app, app calls `FirebaseMessaging.getToken()`. Google play service generates unique FCM token for that app+device. App sends this token to backend server. Token can change whenever user reinstall, clear data, update, or due to security rotation. App should update the backend whenever a new token arrives in `FirebaseMessagingService#onNewToken()` callback.
 
-Backend can send notification through FCM using this token as a normal notification or a silent one, and have payload and priority attached to it. Server posts to FCM using HTTP v1 API with Oauth 2.0. (how does FCM validate / authenticate notification? How are rouge notification prevented if the token is leaked?). FCM then stores the message and determines the device, user, country, connection status, device doze mode, app restrictions etc. Most android devices maintain persistent connection with FCM. This is single connection per device for all apps. (XMPP over TCP). When device is online and criteria are met, a notification message is delivered. 
+Backend can send notification through FCM using this token as a _normal or silent notification_, and have payload and priority attached to it. Server posts to FCM using HTTP v1 API with OAuth2 token provided by Google IAM, along with the app+device token. FCM then stores the message and determines the device, user, country, connection status, device doze mode, app restrictions etc. Most android devices maintain persistent connection with FCM. This is single connection per device for all apps. (XMPP over TCP). When device is online and criteria are met, a notification message is delivered. 
 
 There are 2 types of notifications: Normal Notifications, Silent Notifications or data messages.
-Normal notifications show up in the notification bar in Android System UI **without waking the app**. On tap it can wake up the app or launch the app or do some custom actions. Notifications can trigger custom actions by defining a PendingIntent to start service, boardcast reciever or activity. Some examples are play/pause button which sends broadcast to `MusicControlReciever` or `Mark as read` button which triggers a background service call without launching any UI. These notifications have fixed structure, and limited configuration.
 
-In case of silent notification, its delivered only 
-    - if app is in foreground or 
-    - app in background and notification is high priority (if app is abusive and it sends many high priority messages, wakes up app and runs lots of background jobs, drains battery, its silently marked as abusive and high priority notifications are automatically degraded)  
-    - device is not in doze mode 
-    - or device is in doze mode and app is high priority (app being high priority is a heuristic based decision that Android does based on recent user interactions, foreground services, media usage, location usage, whitelisted background processes etc.). 
+**Normal notifications** show up in the notification bar in Android System UI **without waking the app**. These notifications have fixed structure, and limited configuration. On tap it can wake up the app or launch the app or do some custom actions. Notifications can trigger custom actions by defining a `PendingIntent` to start service, boardcast reciever or activity. Some examples are play/pause button which sends broadcast to `MusicControlReciever` or `Mark as read` button which triggers a background service call without launching any UI. 
+
+**Silent notification** are delivered only if:
+- app is in foreground or 
+- app in background and notification is high priority (if app is abusive and it sends many high priority messages, wakes up app and runs lots of background jobs, drains battery, its silently marked as abusive and high priority notifications are automatically degraded)  
+- device is not in doze mode 
+- or device is in doze mode and app is high priority (app being high priority is a heuristic based decision that Android does based on recent user interactions, foreground services, media usage, location usage, whitelisted background processes etc.). 
     
-For silent notifications, android may temporarily wake the app in background. Silent notification is delivered to the app callback `onMessageReceived`. App can use this to update local DB, sync data or show custom UI. This is short wake time (~10 seconds) and no long running tasks allowed. Heavy work should be offloaded to a workmanager. Silent notifications recieved by the app can help app build a custom notification with cool UI, expanders, custom actions etc and then post it so that user can see it as a normal notification.
+For silent notifications, android may temporarily wake the app in background. Silent notification is delivered to the app callback `FirebaseMessagingService#onMessageReceived`. App can use this time to update local DB, sync data or show custom UI. This is short wake time (~10 seconds) and no long running tasks allowed. Heavy work should be offloaded to a workmanager. App can build a custom notification with cool UI, expanders, custom actions etc and then post it also, so that user can see it as a normal notification.
 
-When app is woken up in background, if it needs to do some sync or network calls, better to use work manager. Using background service is not allowed unless in very special cases. Work manager is scheduled and run when Android gives it a chance. So its the right way. App may be able to start a Foreground service. This can work only because app is given a temporary foreground status when a high priority FCM data message arrives. All work should be over in 10 seconds. Usage of foreground service should follow the guidance of showing foreground notification within 5 seconds of lauching the service. This is given so that apps can do some realtime message sync, process VoIP calls, urgent health / safety alerts, download data needed for displayed notification. 
+When app is woken up in background, if it needs to do some sync or network calls, it is better to use work manager. Using background service is not allowed unless in very special cases. Work manager is scheduled and run when Android gives it a chance. So its the right way. App may be able to start a Foreground service. This can work only because app is _given a **temporary foreground** status when a high priority FCM data message arrives_. All work should be over in 10 seconds. Usage of foreground service should follow the guidance of showing foreground notification within 5 seconds of lauching the service. This option is given so that apps can do some realtime message sync, process VoIP calls, urgent health / safety alerts, download data needed for displayed notification. 
 
-Delivery of notifications are not guaranteed. Its best effort. It may be delayed, dropped and availabilty of network at the device.
+Delivery of notifications are not guaranteed. Its best effort. It may be delayed, dropped and availabilty of network at the device. FCM uses adaptive delivery. Notifications are throttled if too many silent notifications per hour, too much background work is triggered, user rarely opens the app, app is battery-heavy, device is on low battery or idle, device is in doze mode. Rough heuristics suggests that 10-20 silent notifications per hour is fine, 50 to 100 may trigger throttling, 200+ will surely result in severe throttling and blocking of background wakeups. Repeating silent notifications to wake the app is discouraged.
 
-FCM uses adaptive delivery. Notifications are throttled if too many silent notifications per hour, too much background work is triggered, user rarely opens the app, app is battery-heavy, device is on low battery or idle, device is in doze mode. Rough heuristics suggests that 10-20 silent notifications per hour is fine, 50 to 100 may trigger throttling, 200+ will surely result in severe throttling and blocking of background wakeups. Repeating silent notifications to wake the app is discouraged.
-
-FCM server has rate limits per API call. For example `/v1/messages:send` has ~600 QPS per project (varies)
-
-Play store policy is the biggest deterent. Sending promotions or spam notifications, irrelevant, too frequent, deceptive pushes will result in suspendng the app and restricting the FCM usages.
+FCM server has rate limits per API call. For example `/v1/messages:send` has ~600 QPS per project (varies). Play store policy is the biggest deterent. Sending promotions or spam notifications, irrelevant, too frequent, deceptive pushes will result in suspendng the app and restricting the FCM usages.
 
 #### Topic-based notification
 Topic based notifications is a single push message to millions of devices at once. Topic can be something like "weather" or "score" or "global-alerts". Devices can subscribe to these topics and server can send one message to all subscribers. There is no token list, user segmentation or other complications. Topics are global so they can collide. In such case every subscriber recieves every message on the topic. Android app can subsribe thus:
@@ -202,11 +204,6 @@ Topic based notifications is a single push message to millions of devices at onc
 `FirebaseMessaging.getInstance().subscribeToTopic("news")`
 
 Topics are generic and anyone can subscribe to it. So it should never contain userId, email, private info or secrets. Topics can also support normal and data messages.
-
-#### Doze mode
-Doze mode is an aggressive battery saving state introduced in Android 6. Doze mode progresses from Light to Deep. First when screen of off - no doze yet. Device is stationary -> light doze mode. Then after some time it enters deep doze where CPU sleeps most of the time, network is blocked, work deferred and only maintenance window work happens every 10 - 30 mins (increasing gaps). During this time Android wakes up breifly, runs pending jobs, delivers queued notifications, allows app to sync, re-enters doze mode.
-
-Foreground apps, services, high priority push notifications FCM, System apps such as clock etc are only allowed. There is a maintenance window concept when background tasks are allowed in a short burst every few minutes. Alarms set using `setAndAllowWhileIdle()` kind of API are allowed.
 
 ### HTTP Short polling
 This is client specific implementation where client keeps polling server in some interval. A typical implementation is 2s or 5s. 
