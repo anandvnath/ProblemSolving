@@ -7,11 +7,139 @@
 
 ## UI patterns
 ### MVVM 
-### MVP
-### MVI
+This is mode, view, view model. In this view observes view model. View model exposes reactive streams (live data, flow etc). View model does not know about view and hence its fully testable.
+This is presently recommended by Google. This provides excellent lifecycle handling. It also works well with Jetpack compose. Since these data is split across multiple streams and updated async, it can lead to inconsitencies in the view. 
 
-Usecase - If I talk about it, clearly understand what it stands for.
-M, V, VM should be OK. So is Repo. Once you go to Network and storage layer, build more expertise
+ViewModel should not hold Activity or fragment context. This will result in leaks. ViewModels potentially outlive the view, in case of device rotation or similar lifecycle events, view gets recreated, but viewmodel can be reused. Viewmodel can use `application context`. This can be used for resource loading, shared preferences access, DB / File IO or for anything that lives beyond the activity lifecycle. It is not OK to use for Toast, Dialog, starting activities etc. For those, ideally we use some signalling mechanism like `SingleLiveEvent` which triggers the logic to show the dialog or toast or launch the activity from the view layer.
+
+Model refers to the entites, use case, repository and data source abstractions which feed the viewmodel with data.
+
+```
+View → ViewModel → UseCase → Repository → DataSource (network/db)
+```
+
+#### View model lifecycle and shared view models
+Viewmodel is created using factory methods `viewModels()` or `activityViewModels` or `navGraphViewModels`. ViewModelStoreOwner defines the scope of a view model. Activity, Fragment, Nav Graph can all be ViewModelStoreOwners. Internally the owner exposes a ViewModelStore which holds view models against a key (which is class name) in a map. So whenever we call `viewModels()` or `activityViewModels` or `ViewModelProvider(owner).get(ViewMode::class.java)`, Android looks up the respective store and if there is an instance present, it returns, otherwise creates.
+
+Viewmodels are not disposed during configuration changes. They are disposed only when the owner is destroyed. At this time `viewModel#clear()` is invoked.
+
+The traditional way to pass data is by uisng bundle. Whenever an intent is created we can use `putExtra` to pass stuff around. This has to be serializable. A more modern approach is to use shared view model to share data. This often avoids mistakes and helps in sharing the complete state of the viewModel without much effort. A view model scoped to a parent UI can share state with multiple child fragments. In this case we create an viewmodel and use it between the activity and its child fragments. This can be injected by using `activityViewModels()` which uses the Activity as the ViewModelStoreOwner.  
+
+#### Configuration changes
+Configuration change can happen during actions like screen rotation, system dark mode, local or language change, font scale change, orientation change in split screen etc.
+
+When this happens, UI (activity and fragments) are destroyed and recreated. Viewmodels are reused. To handle this properly, all the view state must be in viewmodel and not in view. 
+
+In the case of dark mode switch, resources have to be reloaded: colors.xml, drawable-night, style-night etc. Make use of `SavedStateHandle` to keep transient UI details like scroll position, toggle states etc.
+
+In the case of locale, the resources needs to be reloaded: strings.xml, layout direction, formats etc. This has to be handled before view inflation.
+
+#### Use of SavedStateHandle in viewmodel
+`SavedStateHandle` is a kv store associated with a ViewModel. Its backed by `Bundle` saved in `onSaveInstanceState` and restored when process restarts. An instance can be injected automatically when using factory to create viewModel in Activity or Fragment. `SavedStateHandle` can be used for saving state in case of process death. ViewModel survives config changes, but not process death.
+Common UI restoration items like scroll position, selected tab, filter queries, input fields etc. can be strored here.
+
+The `SavedStateHandle` writes keys into the bundle that is same as what is used in Activity or Fragment's `onSaveInstanceState`. Android writes this bundle into SavedStateRegistry. When process restrats, the bundle is restored and the viewModel will get a `SavedStateHandle` which has the old values populated. So viewModel only have to update the `SavedStateHandle` with whatever information that it needs after process death. All values stored should be primitives and serailzable objects.
+
+Example usage
+```
+@HiltViewModel
+class SearchViewModel @Inject constructor(
+    private val saved: SavedStateHandle
+) : ViewModel() {
+
+    val query = saved.getStateFlow("query", "")
+
+    fun updateQuery(q: String) {
+        saved["query"] = q
+    }
+}
+```
+
+From UI do this
+
+```
+binding.searchInput.doOnTextChanged {
+    viewModel.updateQuery(it.toString())
+}
+```
+
+#### UI Rendering Pipeline
+
+1) Inflate XML → Views created in memory
+2) Measure phase
+3) Layout phase
+4) Draw phase (record operations)
+5) GPU renders to screen
+6) Display refresh (usually 60Hz or 120Hz)
+
+Inflation step converts XML to objects in memory. This is done by `LayoutInflator`. In this phase objects are created via reflection and its attributes are set. At the end of inflation a full hierarchy tree is created. This happens once per view creation and NOT pre frame.
+
+For rendering UI, Android does measure, layout, draw. These are recursive DFS traversals of the view heirarchy tree. 
+
+In the measure phase, we calculate teh width and height of each view. Parent will call `child.measure()`. View's `onMeasure` method is called. Typically this method is implemented by all android views. We need to override it only when we write a custom view. Based on the inputs and the constraints on the view such as wrap_content, match_parent, text size, image size etc, the `onMeasure` method proposes a size. As we can imagine for nested layouts this measurement runs into nested loops and they are costly.
+
+Next phase in layout phase, where we calculate the (x, y) position of a view within its parent. Parent calls `child.layout()` and this results in `onLayout(changed, left, top, right, bottom)` API on the view. The child view is "informed" of its bounds. It stores them and uses them to render itself. It can also use these bounds and render its children. The API also gets a `changed` flag, which indicate if the layout was changed between the current and previous calls. If its not changed, the view can avoid any further expensive layout operations internally.
+
+Next phase in draw phase, in which the views are drawn. Parent will call `child.draw()` and child's `onDraw(canvas)` gets invoked. In this canvas operations like rects, bitmaps, text, paths, gradients etc will get called. All view rendering boils down to such drawing methods. Android does not draw every pixel, it just records the commands and send it to the GPU via `RenderThread`.
+
+On close observation these method pairs are template method pattern. `layout`, `onLayout` etc. The idea here is that `layout` is the public API to trigger and `onLayout` is a hook for the view to customize its behavior. 
+
+One round of measure -> layout -> draw -> GPU submit is called a `frame`. Frames are produced only when something invalidates the view such as user interactions (touch, swipe) or animations or data updates. If there are no invalidations, there is no need to render frames. The refresh rate belongs to the Android screen. It can be 60fps or once in 16ms, 120fps or once in 8ms. So every interval when screen needs to refresh, the vsync component sends a callback the the current app in foreground to a component called `Choreographer`. This component is per UI responsible for sending the screen to be drawn on every refresh. It batches work between each frame and sends a final set of commands to the GPU via the `RenderThread`. 
+
+#### Janks
+If UI takes more than the vsync time (16ms or 8ms etc. depending on the refresh rate of the screen) to go from the `invalidation signal -> measure -> layout -> draw -> RenderThread -> GPU` sequence, the UI does not appear smooth. This is called a jank. The main cases are:
+- Main thread blockage
+- Too many view traversals in measure -> layout -> draw phases.
+- Running heavy operations such as DB or network call on UI thread.
+- GC pauses
+
+Android provides tools such as Android Studio Profiler, Layout Inspector, and FrameTimeline in Logcat to spot slow frames and fix them. Reducing the view heirarchy nesting should be considered strongly to fix janks, apart from fixing issues on main thread and figuring out any memory leaks reading to GC.
+
+#### Recycler view
+Explore more on how it works, use of adapter, diff util etc.
+
+`LayoutManager` restores scroll position automatically, but the data must be identical after recreation. If data changes in viewModel, then recycler view recreation can result in jumpy UI.
+
+
+### MVP
+This is model view presenter. View remains passive and presenter contains the UI logic that updates view using callbacks. View delegates all work to presenter.
+
+Since presenter is non Android code like java or kotlin, its decoupled and compeletely testable. But it is hard to handle deep androoid lifecycle events. 
+
+This is more or less obsolete today.
+
+### MVI
+This is model view intent. The main focus in this is to have immutable state and unidirectional data flow. There is a single state object that represents an entire screen. View emits intents, logic reduces this into new state and that renderes fresh UI.
+
+Example state:
+```
+data class LoginState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val user: User? = null
+)
+```
+
+Example intent:
+```
+sealed class LoginIntent {
+    data class Submit(val username: String, val password: String) : LoginIntent()
+    object ClearError : LoginIntent()
+}
+```
+
+Example reducer:
+```
+fun reduce(state: LoginState, intent: LoginIntent): LoginState =
+    when (intent) {
+        is LoginIntent.Submit -> state.copy(loading = true)
+        is LoginIntent.ClearError -> state.copy(error = null)
+    }
+```
+
+The main advantage here is that this provides absolutely consisten UI. This is used for complext interactive screens, offline, replay, logging etc. The main disadvantage is larger boilerplate code, harder learning curve and large state objects. This is suitable for financial apps, messaging apps, multi step forms with complex UI. With Jetpack compose being state-driven, it naturally matches the MVI pattern. MVVM is good for 90% of the usecases. But there is a trend to move mode towards MVI with jetpack compose.
+
+
 
 ## UI level
 Recycler view - need details about pagination, pre-loading etc.
