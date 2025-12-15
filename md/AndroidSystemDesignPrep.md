@@ -63,44 +63,6 @@ binding.searchInput.doOnTextChanged {
 }
 ```
 
-#### UI Rendering Pipeline
-
-1) Inflate XML → Views created in memory
-2) Measure phase
-3) Layout phase
-4) Draw phase (record operations)
-5) GPU renders to screen
-6) Display refresh (usually 60Hz or 120Hz)
-
-Inflation step converts XML to objects in memory. This is done by `LayoutInflator`. In this phase objects are created via reflection and its attributes are set. At the end of inflation a full hierarchy tree is created. This happens once per view creation and NOT pre frame.
-
-For rendering UI, Android does measure, layout, draw. These are recursive DFS traversals of the view heirarchy tree. 
-
-In the measure phase, we calculate teh width and height of each view. Parent will call `child.measure()`. View's `onMeasure` method is called. Typically this method is implemented by all android views. We need to override it only when we write a custom view. Based on the inputs and the constraints on the view such as wrap_content, match_parent, text size, image size etc, the `onMeasure` method proposes a size. As we can imagine for nested layouts this measurement runs into nested loops and they are costly.
-
-Next phase in layout phase, where we calculate the (x, y) position of a view within its parent. Parent calls `child.layout()` and this results in `onLayout(changed, left, top, right, bottom)` API on the view. The child view is "informed" of its bounds. It stores them and uses them to render itself. It can also use these bounds and render its children. The API also gets a `changed` flag, which indicate if the layout was changed between the current and previous calls. If its not changed, the view can avoid any further expensive layout operations internally.
-
-Next phase in draw phase, in which the views are drawn. Parent will call `child.draw()` and child's `onDraw(canvas)` gets invoked. In this canvas operations like rects, bitmaps, text, paths, gradients etc will get called. All view rendering boils down to such drawing methods. Android does not draw every pixel, it just records the commands and send it to the GPU via `RenderThread`.
-
-On close observation these method pairs are template method pattern. `layout`, `onLayout` etc. The idea here is that `layout` is the public API to trigger and `onLayout` is a hook for the view to customize its behavior. 
-
-One round of measure -> layout -> draw -> GPU submit is called a `frame`. Frames are produced only when something invalidates the view such as user interactions (touch, swipe) or animations or data updates. If there are no invalidations, there is no need to render frames. The refresh rate belongs to the Android screen. It can be 60fps or once in 16ms, 120fps or once in 8ms. So every interval when screen needs to refresh, the vsync component sends a callback the the current app in foreground to a component called `Choreographer`. This component is per UI responsible for sending the screen to be drawn on every refresh. It batches work between each frame and sends a final set of commands to the GPU via the `RenderThread`. 
-
-#### Janks
-If UI takes more than the vsync time (16ms or 8ms etc. depending on the refresh rate of the screen) to go from the `invalidation signal -> measure -> layout -> draw -> RenderThread -> GPU` sequence, the UI does not appear smooth. This is called a jank. The main cases are:
-- Main thread blockage
-- Too many view traversals in measure -> layout -> draw phases.
-- Running heavy operations such as DB or network call on UI thread.
-- GC pauses
-
-Android provides tools such as Android Studio Profiler, Layout Inspector, and FrameTimeline in Logcat to spot slow frames and fix them. Reducing the view heirarchy nesting should be considered strongly to fix janks, apart from fixing issues on main thread and figuring out any memory leaks reading to GC.
-
-#### Recycler view
-Explore more on how it works, use of adapter, diff util etc.
-
-`LayoutManager` restores scroll position automatically, but the data must be identical after recreation. If data changes in viewModel, then recycler view recreation can result in jumpy UI.
-
-
 ### MVP
 This is model view presenter. View remains passive and presenter contains the UI logic that updates view using callbacks. View delegates all work to presenter.
 
@@ -139,13 +101,184 @@ fun reduce(state: LoginState, intent: LoginIntent): LoginState =
 
 The main advantage here is that this provides absolutely consisten UI. This is used for complext interactive screens, offline, replay, logging etc. The main disadvantage is larger boilerplate code, harder learning curve and large state objects. This is suitable for financial apps, messaging apps, multi step forms with complex UI. With Jetpack compose being state-driven, it naturally matches the MVI pattern. MVVM is good for 90% of the usecases. But there is a trend to move mode towards MVI with jetpack compose.
 
+## UI Rendering Pipeline
+
+1) Inflate XML → Views created in memory
+2) Measure phase
+3) Layout phase
+4) Draw phase (record operations)
+5) GPU renders to screen
+6) Display refresh (usually 60Hz or 120Hz)
+
+Inflation step converts XML to objects in memory. This is done by `LayoutInflator`. In this phase objects are created via reflection and its attributes are set. At the end of inflation a full hierarchy tree is created. This happens once per view creation and NOT pre frame.
+
+For rendering UI, Android does measure, layout, draw. These are recursive DFS traversals of the view heirarchy tree. 
+
+In the measure phase, we calculate teh width and height of each view. Parent will call `child.measure()`. View's `onMeasure` method is called. Typically this method is implemented by all android views. We need to override it only when we write a custom view. Based on the inputs and the constraints on the view such as wrap_content, match_parent, text size, image size etc, the `onMeasure` method proposes a size. As we can imagine for nested layouts this measurement runs into nested loops and they are costly.
+
+Next phase in layout phase, where we calculate the (x, y) position of a view within its parent. Parent calls `child.layout()` and this results in `onLayout(changed, left, top, right, bottom)` API on the view. The child view is "informed" of its bounds. It stores them and uses them to render itself. It can also use these bounds and render its children. The API also gets a `changed` flag, which indicate if the layout was changed between the current and previous calls. If its not changed, the view can avoid any further expensive layout operations internally.
+
+Next phase in draw phase, in which the views are drawn. Parent will call `child.draw()` and child's `onDraw(canvas)` gets invoked. In this canvas operations like rects, bitmaps, text, paths, gradients etc will get called. All view rendering boils down to such drawing methods. Android does not draw every pixel, it just records the commands and send it to the GPU via `RenderThread`.
+
+On close observation these method pairs are template method pattern. `layout`, `onLayout` etc. The idea here is that `layout` is the public API to trigger and `onLayout` is a hook for the view to customize its behavior. 
+
+One round of measure -> layout -> draw -> GPU submit is called a `frame`. Frames are produced only when something invalidates the view such as user interactions (touch, swipe) or animations or data updates. If there are no invalidations, there is no need to render frames. The refresh rate belongs to the Android screen. It can be 60fps or once in 16ms, 120fps or once in 8ms. So every interval when screen needs to refresh, the vsync component sends a callback the the current app in foreground to a component called `Choreographer`. This component is per UI responsible for sending the screen to be drawn on every refresh. It batches work between each frame and sends a final set of commands to the GPU via the `RenderThread`. 
+
+## Janks
+If UI takes more than the vsync time (16ms or 8ms etc. depending on the refresh rate of the screen) to go from the `invalidation signal -> measure -> layout -> draw -> RenderThread -> GPU` sequence, the UI does not appear smooth. This is called a jank. The main cases are:
+- Main thread blockage
+- Too many view traversals in measure -> layout -> draw phases.
+- Running heavy operations such as DB or network call on UI thread.
+- GC pauses
+
+Android provides tools such as Android Studio Profiler, Layout Inspector, and FrameTimeline in Logcat to spot slow frames and fix them. Reducing the view heirarchy nesting should be considered strongly to fix janks, apart from fixing issues on main thread and figuring out any memory leaks reading to GC.
 
 
-## UI level
-Recycler view - need details about pagination, pre-loading etc.
-Image, Avatar rendering,
+## Recycler view
+The main usecase that this solves is listing. Be it a list of messages, tweets, posts, images etc. Before recycler views, Android used `ListView` and `GridView` for listing purposes. These have limitations when it comes to layout flexibility, animations, reusing items is not clean to implement, there is no diffing mechanism etc. `RecyclerView` solves these short comings. It provides ability to render large lists efficiently, reuse the item views, supports animations and variable layouts, provides pluggable layout manager, support paging and infinte scroll.
 
-## Image / Media handling
+The core architecture of `RecyclerView`:
+
+```
+RecyclerView
+ ├─ LayoutManager
+ ├─ ViewHolder
+ ├─ Adapter
+ ├─ RecycledViewPool
+ └─ ItemAnimator
+```
+
+`LayoutManager` determines how items are arranged. There are many layout manager impementations available such as `LinerLayoutManager`, `GridLayoutManager`, `FlexboxLayoutManager`, `StaggeredGridLayoutManager` etc. (What does it take to write our own?)
+
+`ViewHolder` holds references to item views. (what are item views and how are they created?)
+
+`Adapter` creates and binds the `ViewHolder` to data
+
+`RecycledViewPool` reuses views off-screen and avoids re-inflation
+
+`ItemAnimator` handles animation during insert, delete or change.
+
+Adding recycler view into the layout is like this:
+```
+<androidx.recyclerview.widget.RecyclerView
+    android:id="@+id/list"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"/>
+```
+
+Then we write the adapter. Adapter class extends `RecyclerView.Adapter` (different types of adapter?) and view holder extends from `RecyclerView.ViewHolder`.
+```
+class UserAdapter : RecyclerView.Adapter<UserAdapter.VH>() {
+    class VH(val view: View) : RecyclerView.ViewHolder(view)
+
+    // While creating view holder, internally we inflate the view and attach it.
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+        val view = LayoutInflater.from(parent.context)
+            .inflate(R.layout.item_user, parent, false)
+        return VH(view)
+    }
+
+    // when view holder is bound, we populate the view associated with the viewHolder
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        val user = users[position]
+        holder.view.username.text = user.name
+    }
+
+    // this provides the number of items
+    override fun getItemCount() = users.size
+}
+```
+
+Each item (R.layout.item_user) is just a normal layout file
+
+```
+<LinearLayout ...>
+    <ImageView .../>
+    <TextView .../>
+    <Button .../>
+</LinearLayout>
+```
+
+If there are multiple view types in a single recycler view, then view type has to be returned per position. (what do we return here? R.layout.*?)
+```
+override fun getItemViewType(position: Int): Int
+```
+
+When a list item scrolls off the screen, the view holder is put into the `RecycledViewPool`. It is reused for later items (now what happens when there are different item view types?). This avoid costly inflation. As a result, view creation does not happen during scroll. 
+
+### Perf and best practices
+Using `ListAdapter + DiffUtil` for better efficiency. DiffUtil calcualtes changes in O(n) time and it prevents `notifyDataSetChanged` (what and when is this called?), flickering and full rebinds. 
+
+```
+class UserAdapter : ListAdapter<User, VH>(DIFF) {
+    companion object {
+        val DIFF = object : DiffUtil.ItemCallback<User>() {
+            override fun areItemsTheSame(old: User, new: User) = old.id == new.id
+            override fun areContentsTheSame(old: User, new: User) = old == new
+        }
+    }
+}
+```
+
+Avoid using nested recycler views, use multiple view types instead. 
+
+If the list size does not change based on content dimensions, then use `setHasFixedSize(true)`. This provides faster layout.
+
+Use `getItemId` and return stable IDs from it. This helps in smooth animations and correct item movements
+
+```
+override fun getItemId(position: Int) = items[position].id
+setHasStableIds(true)
+```
+
+### Pagination
+
+If there is a fixed set of items use
+
+```
+    // this provides the number of items
+    override fun getItemCount() = users.size
+```
+
+If there are paginated items and we load page one after the other do this:
+
+
+For infinite scroll:
+
+```
+Room ⟶ PagingSource ⟶ Pager ⟶ PagingData ⟶ RecyclerView
+```
+
+Need to fill more details on these.
+
+### Preloading
+
+If the user scrolls fast, there can be blank views and flicker. First we provide animated place holder views. Second we prefetch using `setItemViewCacheSize()`. This controls how many off-screen items are kepty in memory pre-bound for smooth scrolling experience.
+
+```
+recyclerView.layoutManager = LinearLayoutManager(context, ...)
+layoutManager.isItemPrefetchEnabled = true
+
+recyclerView.setItemViewCacheSize(10)
+
+Pager(
+  PagingConfig(pageSize = 20, prefetchDistance = 3)
+)
+```
+
+
+### Recycler view during configuration change
+`LayoutManager` restores scroll position automatically, but the data must be identical after recreation. If data changes in viewModel, then recycler view recreation can result in jumpy UI.
+
+## UI level features
+
+### Data binding
+Enabling `dataBinding` in Gradle triggers the Data Binding compiler, which generates binding classes for your XML layouts, processes `@Bindable` fields, and wires two-way binding expressions (`@{ }`). It replaces `findViewById`, adds observable machinery, and integrates binding adapters. Essentially it turns your XML into a type-safe, generated API for accessing views and binding data.
+
+### View binding
+
+
+### Image / Media handling
 Need details on how to go about this area
 How to render this should be learnt.
 
@@ -492,6 +625,9 @@ If one wants to access BLE device from their app, they should start off with ask
 | WebSocket | SSE | GraphQL  | gRPC | MQTT |
 |-|-|-|-|-|
 | HTTP/1 only for upgrade,<br> TLS + TCP <br> No HTTP/2 (No upgrade) <br> No HTTP/3 (has WebTransport)  | HTTP/1/2 | HTTP 1/2/3 <br> WebSocket or SSE for subscription | HTTP/2 only | TCP - Implements own TLS |
+
+## Streaming protocols
+
 
 ## HTTP
 
