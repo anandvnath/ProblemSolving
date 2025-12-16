@@ -135,6 +135,9 @@ Android provides tools such as Android Studio Profiler, Layout Inspector, and Fr
 
 
 ## Recycler view
+
+_See [sample app](../sample-andoid-apps/ListingApp/)_ 
+
 The main usecase that this solves is listing. Be it a list of messages, tweets, posts, images etc. Before recycler views, Android used `ListView` and `GridView` for listing purposes. These have limitations when it comes to layout flexibility, animations, reusing items is not clean to implement, there is no diffing mechanism etc. `RecyclerView` solves these short comings. It provides ability to render large lists efficiently, reuse the item views, supports animations and variable layouts, provides pluggable layout manager, support paging and infinte scroll.
 
 The core architecture of `RecyclerView`:
@@ -142,8 +145,9 @@ The core architecture of `RecyclerView`:
 ```
 RecyclerView
  ├─ LayoutManager
- ├─ ViewHolder
  ├─ Adapter
+    ├─ ViewHolder
+    ├─ DiffUtil
  ├─ RecycledViewPool
  └─ ItemAnimator
 ```
@@ -242,14 +246,16 @@ If there is a fixed set of items use
 
 If there are paginated items and we load page one after the other do this:
 
-
 For infinite scroll:
 
 ```
-Room ⟶ PagingSource ⟶ Pager ⟶ PagingData ⟶ RecyclerView
+Pager ⟶ Flow<PagingData> ⟶ RecyclerView
+ ├─ PagingSource ⟶ Room
+ └─ RemoteMediator ⟶ Network client
 ```
 
-Need to fill more details on these.
+RemoteMediator is invoked whenever there is a request for new pages (or prefech) that is not available in the DB. That does a network call and fetches data, stores into DB.
+PagingSource provides a way to send DB updates as pages to the RecyclerView using Pager and PagingData. The remote updates thus reaches the UI.
 
 ### Preloading
 
@@ -266,31 +272,168 @@ Pager(
 )
 ```
 
-
 ### Recycler view during configuration change
 `LayoutManager` restores scroll position automatically, but the data must be identical after recreation. If data changes in viewModel, then recycler view recreation can result in jumpy UI.
 
 ## UI level features
 
-### Data binding
-Enabling `dataBinding` in Gradle triggers the Data Binding compiler, which generates binding classes for your XML layouts, processes `@Bindable` fields, and wires two-way binding expressions (`@{ }`). It replaces `findViewById`, adds observable machinery, and integrates binding adapters. Essentially it turns your XML into a type-safe, generated API for accessing views and binding data.
+Traditionally to bind values to UI we use `find` methods such as `findViewById`. This is inefficient, cumbersome and error prone. Bindings were introduced to solve this issue.
 
 ### View binding
+View binding is used for safe view lookups. It does not support binding expressions in XML to UI or two way bindings. This is faster and light weight compared to data binding. This is recommended for simple UI. This is used to replace `findViewById` calls. Enabled in gradle file using `viewBinding=true`
+
+### Data binding
+This is more complex than view bindings and has more capabilities. Enabling `dataBinding=true` in Gradle triggers the Data Binding compiler, which generates binding classes for your XML layouts, processes `@Bindable` fields, and wires two-way binding expressions (`@{ }`). It replaces `findViewById`, adds observable machinery, and integrates binding adapters. Essentially it turns your XML into a type-safe, generated API for accessing views and binding data.
+
+### Image handling
+_See [sample app](../sample-andoid-apps/ListingApp/)_ 
+
+Image handling is critical in Android app as is heavy operation resulting from having to work with compressed formats such as JPEG, PNG, WEBP etc. Decoding these are CPU intesive opeartions. Images can cause UI janks, OOM errors, memory issues and even crashes in low end phones. 
+
+Capturing image is easy now-a-days and the resoultion of images are quite big. A high definition image (1080 x 1920) can take approx 8MB (depending on format). So we need a smart way to handle images. We should:
+- handle network download with correct caching headers, retry logic etc.
+- decoding compressed formats to bitmap
+- cache them to avoid expensive network calls (typically LRU cache)
+- download correct size as required
+- progressive loading (thumbnail + low res + high res)
+- be lifecycle aware and avoid wasteful work with UI is dismissed.
+
+Built in progressive loading will require server to stream images over http and image itself must be progressive. Fake progressive loading is done by loading low res image first and then high res image (based on if user is touching or expanding etc.) or just thumbnail + high res or low res + high res. These require backend to expose separate URLs for these images. This is typically supported by CDNs / image servers. Thumbnails can also be replaced by `BlurHash` strings which are light weight. This is generated on backend and android has support to render it on UI quickly using BlurHash decoder libraries.
 
 
-### Image / Media handling
-Need details on how to go about this area
-How to render this should be learnt.
+An image library should support these functionalities. Some popular options are Glide, Fresco, Picasso, Coil etc.
+
+In summary COIL (Coroutine ) is Google recommended as its kotlin first and coroutine friendly, small size and modern library. 
+Main API is to use `load` extension function on an `imageView` to load the image. The configuration can be centralized and injected by DI to configure the in-memory and disk caching details.
 
 ## Attachments
-How to handle attachments. 
-Client + Server solution
-Retrys
-How to quickly and reliably let the user go after attaching
+Attachments are tricky to handle in mobile, since the files can be huge and cannot be loaded it fully into memory. Holding large files in memory can lead to OOM. Cellular and flaky network, switching between wifi and cellular, restrictions on what can run in background and possibility of the app being killed when not in foreground add to the complexities. Also, app has restricted access to the files stored in the mobile. Files come from variety of sources such as cloud providers (Google drive, one drive), 3rd party file pickers, download provider, storage etc. Thus its important that attachments are streamed, chunked and resumable.
 
-## Pagination
-Pagination for a recycler view - client side
-Getting paged data from server side - strategies and tradeoffs
+```
+User picks file → Get URI → Resolve metadata → Stream via InputStream → 
+Downsample if needed → Upload (possibly chunked) → Notify backend → Cleanup temp files
+```
+When user picks a file, we get a `URI` and not a `File` in the code. That `URI` needs to be resolved to actual file path. Always use `contentResolver.openInputStream(uri)` to access the file. A stream always reads the file progressively and does not load the entire file into the memory.
+
+In case of images or videos, there is an option to downsample the file which are heavy, thereby retaining good quality playable files, but at the same time reducing the size. There are libraries available which can help in downsampling images (Coil / Glade transformation) and video (ffmpeg-kit, used by apps like instagram and tiktok).
+
+The upload should always be resumable, meaning, the file should be in app cache directory and in case of failure, the file is readily available with the app, rather than obtaining again from the content provider. 
+
+Chunking is a common technique used, where a single file is split into multiple chunks of 256 kb, 512 kb or 1 mb. This is then stitched back together in the backend.  This can help to upload files without repetitive work over a flaky network, or even over app restarts. Backend should support chunking for this to work. There are standard protocols available such as Google Drive Resumable upload API, AWS S3 Multipart upload, Azure blob storage block upload etc. Typical workflow is:
+
+1. Start upload session 
+
+```
+POST /uploads/start
+returns uploadSessionId, chunkSize and URL
+```
+
+1. Upload chunk
+```
+POST /uploads/{uploadSessionId}
+Headers:
+    Chunk-Index: 3
+    Content-Range: bytes 5000-5999/50000
+Body: [chunk data]
+```
+
+1. Complete upload session
+```
+POST /uploads/{uploadSessionId}/finish
+```
+
+On top of this, each chunk can be gzip'ed as well. In this way, backend will have to decompress the chunks before stitching them together. There are two approaches in this. First is to compress each chunk separately. In this case, overall compression ratio is lower than compressing the entire file. Second is to compress the file first and then chunk it and send. The downside is that the upload is not resumable as gzip compression depends on all previous bytes. So when upload has to resume, the gzip has to start from the beginning of the file and not from the middle. Theoretically, if we wanted to resume, we could start gzip for entire file and start sending the chunks from where it dropped off last time. But this is a lot of wasteful work compared to gzip'ing each chunk. Another option is to first gzip the file and then send it as chunks. This works, but will incur extra storage (temporary, but could be significant), double read and IO (deal with original file and then gzip file), high upfont CPU cost (compressing 500MB video or even 20MB image album can take 5 to 10 seconds on mid end phones). The other problem is that many file formats are already compressed (like JPEG, PNG, MP4, PDF, HEIC etc). So we may spend unnecessary cost on those. 
+
+For mobile usecase, its better to compress each chunk separately. HTTP header `Content-Encoding` should be set to `gzip` for each chunk when sending compressed content. The best strategy is to start uploading immediately, show a progress bar and do it in a reliable, chunked, resumable way. Even compressing chunks could be optional as it may just add overhead. Compressing makes sense only for large text or log files etc. For chat attachments, photos, videos, cloud store, messaging and social apps etc, compression can be skipped because users do not want processing delay.
+
+Let's take an example of Google's resumable upload. It supports
+- Chunking
+- random byte ranges
+- network interruptions
+- resumeability at the exact byte offset
+- no redundant uploads
+- no need to keep all chunks in memory
+
+Client sends a request to start upload 
+
+```
+POST https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable
+Headers:
+  Authorization: Bearer <token>
+  X-Upload-Content-Length: <file-size>
+  X-Upload-Content-Type: <mime>
+Body:
+  { "name": "myfile.jpg" }
+```
+
+Server responds
+
+```
+HTTP/1.1 200 OK
+Location: https://www.googleapis.com/upload/drive/v3/files?upload_id=ABC123...
+```
+
+`upload_id` is a resumable upload session.
+
+Google lets you choose any chunk size (e.g. 256 KB, 1 MB, 10 MB), but recommends >256 KB. Upload uses PUT with a `Content-Range` header:
+```
+PUT <upload-url>
+Content-Length: 256000
+Content-Range: bytes 0-255999/1000000
+
+<binary data for the first chunk>
+```
+
+Success server response
+```
+308 Resume Incomplete
+Range: bytes=0-255999
+```
+
+HTTP 308 means:
+- The chunk was accepted
+- Upload is not finished
+- You may continue at the next byte offset
+
+Suppose upload fails mid-transfer (network drop, app closed, etc.) then client asks 
+```
+PUT <upload-url>
+Content-Length: 0
+Content-Range: bytes */1000000
+```
+
+for which server sends
+
+```
+308 Resume Incomplete
+Range: bytes=0-511999
+```
+which means “I have received bytes 0 through 511,999. Continue uploading from byte 512,000.” Then client can resume
+
+```
+PUT <upload-url>
+Content-Range: bytes 512000-767999/1000000
+```
+
+When final chunk is sent client:
+```
+PUT <upload-url>
+Content-Range: bytes 512000-999999/1000000
+Content-Length: 488000
+```
+
+server responds
+
+```
+200 OK
+{
+  "id": "...",
+  "name": "myfile.jpg",
+  ...
+}
+```
+
+### Media handling
 
 ## Deeper Android
 Lifecycle
@@ -306,12 +449,17 @@ Camera
 Bluetooth?
 Network / wifi & 4G
 Broadcast receivers
+
 ### Work managers
+
 ### Services - Bound and unbound
+
 ### APK structure
 - Bundles / flavors etc
+
 ### Binder / IPC
 How to build a separate telemetry / logging APK that can be reused as a service across multuple apps?
+
 ### Doze mode
 Doze mode is an aggressive battery saving state introduced in Android 6. Doze mode progresses from Light to Deep. First when screen of off - no doze yet. Device is stationary -> light doze mode. Then after some time it enters deep doze where CPU sleeps most of the time, network is blocked, work deferred and only maintenance window work happens every 10 - 30 mins (increasing gaps). During this time Android wakes up breifly, runs pending jobs, delivers queued notifications, allows app to sync, re-enters doze mode.
 
@@ -562,6 +710,24 @@ TLS (presentation & session = encryption)
 ↓
 TCP (transport)
 ```
+
+gRPC needs a `.proto` schema which defines data structures, field number and services. This is a fixed schema which should be identical between client and server as the marshalling and unmarshalling will depend on this. gRPC is forward and backward compatible, it will ignore unknown fields and set defaults to optional fields.
+
+```
+syntax = "proto3";
+
+message User {
+  int32 id = 1;
+  string name = 2;
+}
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User);
+}
+```
+
+gRPC recommends to design the schema so that there are no removals or fields or reuse of field numbers or changing the meaning or type of the field. We can however add new fields, change field name (keeping the field number same), change the defaul values, adding new RPC methods or even deprecating fields.
+
 
 ### MQTT
 Message Queing Telemetry Transport. This is a lightweight, pub-sub messaging protocol built on top of TCP, designed for real time communication, especially over unrealiable and low-bandwidth networks. This is widely used on IOT devices, sensors, chat apps and mobile apps.  In this the client connects to a central broker and publish or subscribe to named topics for real-time message delivery. MQTT scales to millions of connections 
