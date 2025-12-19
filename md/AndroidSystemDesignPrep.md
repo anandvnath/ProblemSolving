@@ -5,6 +5,54 @@
 2. Container diagram - Zoom into mobile app and show details within, such as image loader, DI, storage service, network service, presentation, relevant flows.
 3. Component diagram - Module level details where each item is an independent entity which can be developed in isolation. This helps in providing the vision of how a team can work on the problem. Here talk about functionality and divide each into modules contains repo, use cases, view models etc.
 
+## Android and app fundamentals
+Android OS is a layered system where application runs on top of managed runtime. All app lifecycle, process control is owned by the system. System can kill any app any time. 
+
+At the bottom, there is a Linux kernel which provides primitives such as process scheduling, memory management, file system, networking, device drivers etc. Android biulds on top of this and provides a higher-level abstraction. Every app runs on a sandbox, with its own unique process id, memory allocation, which is isolated form other apps. Each app is in Android is its own user to the kernel, thereby making it easier for isolation.
+
+Above the kernel we have ART (Android run time). This layer contains native deamons and libraries largely in C and C++. Example MediaServer, Binder's driver interface etc. ART is responsible for executing app bytecode, manage memory, optimize execution. It uses ahead-of-time and just-in-time compilation. ART is not started separately for each app, but Android uses a special system process called `Zygote` to host a pre-initialized runtime.
+
+Zygote is started up during Android boot up. Zygote is a process factory. It initializes ART and preloads common framework classes, resources and native liberaries that almost every app would need. 
+
+AMS (Activity Management Service) is the brain of Android which decides when a process should be created, which component should run, how the process fits into the overall system state. It tracks running processes, tasks, activities, services, broadcasts and is in charge of lifecycle transitions. AMS makes policy decisions such as if a process should be started, reused or killed, under which UID it runs, which component should be launched etc. 
+
+Once AMS decides these and wants to launch an app, it uses Zygote. You can imagine Zygote to be a container waiting ready and when AMS tells it, it forks itself (duplicates itself) and that becomes the app process. Zygote goes back to waiting for next request completely detached from the forked child process, which is now under AMS control. 
+
+```
+AMS → Zygote socket → Zygote forks → new app process → ActivityThread starts
+```
+
+In most cases, every app has only single process. Everything inside of it are just classes in a JVM. Be it service, activity, receivers, all of these run in a single process. The way this works is using a Looper. More about that later.
+
+There are cases where an app can have multiple processes when it wants to offload some heavy work to a separate process. In this case, a new app remote process is created using zygote using the same APK. This app remote process has its own process, memory, heap etc. The two will communicate using IPC (ALDL etc.)
+
+From Android point of view app is a collection of capabilities / components which the AMS will activate and deactivate as needed. So a call like `startActivity` for starting an activity in an app will not create a screen, but it submits this request via IPC to AMS and then AMS will decide if it has to create a new process or reuse the existing process to do what is asked for.
+
+### Looper and threads
+Android app is not single threaded. It is event loop driven on specific thread. Main thread is a normal linux thread which is created when app is forked and launched by the zygote and AMS. It has a looper and it owns UI state. Main thread spins in an infinite loop, pulling messages from message queue and executing them one at a time. Acticity lifecycle callbacks, input events (touch, key), view invalidation and layout passes, `Handler.post{}`, `runOnUiThread{}` etc are messages in the message queue. When these callbacks or messages get executed, inside there, you could have something like this:
+
+```
+lifecycleScope.launch {
+    // By default this uses Dispatchers.Main
+    val data = withContext(Dispatchers.IO) {
+        fetchFromNetworkOrDB()
+    }
+
+    updateUI(data)
+}
+``` 
+
+This launch is yet another message (runnable) in the message queue for main looper. When that executes in its event cycle, the code inside is asking for IO dispatcher. That time the block (runnable) is submitted to the IO thread pool, where it gets executed. This is how background threads come into play. They perform blocking work like network calls, disk IO or computation. Then they post the result back to the main thead. In our example, the coroutine will resume in MAIN dispatcher, otherwise one could use `Handler(Looper.getMainLooper()).post {}` which is old style. 
+
+Mental model:
+```
+Threads execute code
+Loopers serialize work on a thread
+Executors manage pools of threads
+Dispatchers choose executors or loopers
+Coroutines split execution into resumable pieces
+```
+
 ## UI patterns
 ### MVVM 
 This is mode, view, view model. In this view observes view model. View model exposes reactive streams (live data, flow etc). View model does not know about view and hence its fully testable.
@@ -597,7 +645,7 @@ There are explicit intents, which call out the exact class to launch. This is us
 </activity>
 ```
 
-Here the action is SEND, category is default, data is text. So when that matches in a intent, the said activity is a candidate. If there are more candidates system provides a chooser. (#*#* what are categories) Categories are DEFAULT, BROWSABLE, LAUNCHER. System addes DEFAULT if none specified.
+Here the action is SEND, category is default, data is text. So when that matches in a intent, the said activity is a candidate. If there are more candidates system provides a chooser. Categories are DEFAULT, BROWSABLE, LAUNCHER, APP_BROWSER, HOME, OPENABLE etc. System addes DEFAULT if none specified.
 
 Pending intent is a token that grants another app or system permission to perform an action on your apps's behalf. These are used with notitications, alarms, widgets etc. Pending intent can also do the same things as an intent.
 
