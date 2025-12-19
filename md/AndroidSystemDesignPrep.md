@@ -52,6 +52,113 @@ Executors manage pools of threads
 Dispatchers choose executors or loopers
 Coroutines split execution into resumable pieces
 ```
+## Android lifecycle and lifecycle components
+Need for lifecycle - Android apps run on resource-constrained devices. They compete with other apps. They can be killed and relaunched several times. Lifecycle provides clear hook points for allocating resource at the right time, releasing them, setting up and tearing down UI etc. 
+
+The entire app has a lifecycle which can be obtained from `ProcessLifecyleOwner.get().getLifecycle()`. It's ON_CREATE is dispached exactly once and ON_START, ON_RESUME events are dispatched as the first activity moves through these events. ON_STOP, ON_PAUSE as last activity moves through these events, with a delay (long enough to handle configuration changes cases). These are useful for tracking when app is coming to foreground and background.
+
+Activity also goes through the lifecycle of create, start, resume (when app is ready to interact), pause, stop and destroy. When configuration change happens app goes through pause, stop and destroy and then immediately activity is launched which causes create, start and resume.
+
+Fragment has two lifecycles. One is for fragment instance which goes through attach, create, destroy and detach. When the fragment object is created and attached to an activity `onAttach` and `onCreate` are called. Fragment can survive configuration changes if its retained by `FragmentManager`. A `FragmentManager` is associated with an Activity or a Fragment. It can have child managers if there are nested Fragments in Activities. It manages fragments, track which fragments exist, which are visible, execute fragment transactions, manage back stack, drive the fragment lifecycle. 
+
+FragmentManager during config change, stores the fragment class names, arguments and save state bundles and restore them after activity is created and a new fragment manager is created. This is why Fragments need empty constructor and no assumptions or state apart from those saved in saved state bundles.
+
+```
+// Hypothetical and simplified
+class FragmentManager {
+  // contains all instances of fragments known to manager. They can be visible, hidden, detached, back stacked.
+  val fragmentStore: Map<FragmentId, Fragment>
+  // Subset, active fragments - only fragments attached to UI
+  val addedFragments: List<Fragment>
+  // A BackStackRecord is a frozen record of a bunch of operations commited via FragmentTransactions.
+  val backstack: Stack<BackStackRecord>
+
+  // Async, execute all transactions queued in next main-loop cycle.
+  fun commit()
+
+  // Execute immediatey all transactions queued in next main-loop cycle. Not recommended
+  fun commitNow()
+
+  // Forces all queued transactions to run immediately, not recommended.
+  fun executePendingTransactions()
+}
+
+class FragmentTransaction {
+  val fragment: Fragment
+  val op: List<Op> // add, remove, show, hide, addToBackstack etc.
+}
+```
+
+Fragment view however has createView, viewCreated, start, resume, pause, stop, destroyView. Fragments can be retained in backstack, but the view is not, so the view is created before its presented to the user and destroyed as soon as its not needed to conserve memory. Fragment binding should be created in `onCreateView` and cleared in `onDestroyView`
+
+```
+private var _binding: FragmentMyBinding? = null
+private val binding get() = _binding!!
+
+override fun onCreateView(...) {
+    _binding = FragmentMyBinding.inflate(inflater)
+    return binding.root
+}
+
+override fun onDestroyView() {
+    super.onDestroyView()
+    _binding = null
+}
+```
+
+Doing this instead is wrong
+
+```
+class MyFragment : Fragment() {
+    lateinit var binding: FragmentMyBinding
+
+    override fun onCreateView(...) {
+        binding = FragmentMyBinding.inflate(inflater)
+        return binding.root
+    }
+}
+```
+
+Fragments should use `viewLifecycleOwner` to observe flows or live data.
+
+```
+// Never do this. This will be tied to the Fragment lifecycle which will outlive the view and hence leak
+viewModel.data.observe(this) { ... }
+
+// Do this.
+viewModel.data.observe(viewLifecycleOwner) { ... }
+```
+
+A view model is a lifecycle aware state holder which survives configuration changes and is destroyed when the scope owner is destroyed. View model can be obtained using `by viewModels()` in activity and fragments and by using `by activityViewModel()` when using shared view model in fragments.
+
+```
+Activity created
+ → ViewModel created
+ → Rotation
+ → Activity recreated
+ → Same ViewModel reused
+ → Activity finished
+ → ViewModel cleared (onCleared)
+```
+
+There are few lifecycle aware APIs that are important. 
+- `repeatOnLifecycle`
+- `launchWhenStarted`
+- `viewLifecycleOwner.lifecycleScope`
+
+```
+viewLifecycleOwner.lifecycleScope.launch {
+    repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.uiState.collect { state ->
+            render(state)
+        }
+    }
+}
+```
+This is create a block which is repeated on every start event on the lifecycle owner's lifecycle.
+
+### Binder / IPC
+How to build a separate telemetry / logging APK that can be reused as a service across multuple apps?
 
 ## UI patterns
 ### MVVM 
@@ -394,6 +501,7 @@ On top of this, each chunk can be gzip'ed as well. In this way, backend will hav
 
 For mobile usecase, its better to compress each chunk separately. HTTP header `Content-Encoding` should be set to `gzip` for each chunk when sending compressed content. The best strategy is to start uploading immediately, show a progress bar and do it in a reliable, chunked, resumable way. Even compressing chunks could be optional as it may just add overhead. Compressing makes sense only for large text or log files etc. For chat attachments, photos, videos, cloud store, messaging and social apps etc, compression can be skipped because users do not want processing delay.
 
+### Google resumable upload - Example
 Let's take an example of Google's resumable upload. It supports
 - Chunking
 - random byte ranges
@@ -481,7 +589,7 @@ server responds
 }
 ```
 
-### Media handling
+## Media handling
 
 ExoPlayer is the default choice when it comes to streaming media. Most apps like Youtube, Instagram, Spotify, Netflix, Teams etc use it. It gives good control over buffering, adaptive streaming, track selection, caching and [DRM](#drm-digital-rights-management). 
 
@@ -507,7 +615,7 @@ LoadControl.Builder()
 
 MediaPlayer (old tech) supports progressive streaming of MP4 files and HLS streaming. For details on streaming protocols, refer [this section](#streaming-protocols).
 
-#### HTTP progressive streaming
+### HTTP progressive streaming
 Client does range requests (HTTP 206) and reads from byte offsets as needed. This works without any server intelligence, it just needs to support range requests. Most web servers support this. More [details here](#http-progressive-streaming).
 
 ```
@@ -515,113 +623,8 @@ GET /video.mp4
 Range: bytes=100000-200000
 ```
 
-#### HLS / DASH
+### HLS / DASH
 For this backend should support video encoding into multiple qualities: 1080p, 720p, 480p etc. It needs to break the video into segments and provide a manifest. We will explore streaming backend technologies in [detail](#hls--dash).
-
-## Android lifecycle and lifecycle components
-Need for lifecycle - Android apps run on resource-constrained devices. They compete with other apps. They can be killed and relaunched several times. Lifecycle provides clear hook points for allocating resource at the right time, releasing them, setting up and tearing down UI etc. 
-
-The entire app has a lifecycle which can be obtained from `ProcessLifecyleOwner.get().getLifecycle()`. It's ON_CREATE is dispached exactly once and ON_START, ON_RESUME events are dispatched as the first activity moves through these events. ON_STOP, ON_PAUSE as last activity moves through these events, with a delay (long enough to handle configuration changes cases). These are useful for tracking when app is coming to foreground and background.
-
-Activity also goes through the lifecycle of create, start, resume (when app is ready to interact), pause, stop and destroy. When configuration change happens app goes through pause, stop and destroy and then immediately activity is launched which causes create, start and resume.
-
-Fragment has two lifecycles. One is for fragment instance which goes through attach, create, destroy and detach. When the fragment object is created and attached to an activity `onAttach` and `onCreate` are called. Fragment can survive configuration changes if its retained by `FragmentManager`. A `FragmentManager` is associated with an Activity or a Fragment. It can have child managers if there are nested Fragments in Activities. It manages fragments, track which fragments exist, which are visible, execute fragment transactions, manage back stack, drive the fragment lifecycle. 
-
-FragmentManager during config change, stores the fragment class names, arguments and save state bundles and restore them after activity is created and a new fragment manager is created. This is why Fragments need empty constructor and no assumptions or state apart from those saved in saved state bundles.
-
-```
-// Hypothetical and simplified
-class FragmentManager {
-  // contains all instances of fragments known to manager. They can be visible, hidden, detached, back stacked.
-  val fragmentStore: Map<FragmentId, Fragment>
-  // Subset, active fragments - only fragments attached to UI
-  val addedFragments: List<Fragment>
-  // A BackStackRecord is a frozen record of a bunch of operations commited via FragmentTransactions.
-  val backstack: Stack<BackStackRecord>
-
-  // Async, execute all transactions queued in next main-loop cycle.
-  fun commit()
-
-  // Execute immediatey all transactions queued in next main-loop cycle. Not recommended
-  fun commitNow()
-
-  // Forces all queued transactions to run immediately, not recommended.
-  fun executePendingTransactions()
-}
-
-class FragmentTransaction {
-  val fragment: Fragment
-  val op: List<Op> // add, remove, show, hide, addToBackstack etc.
-}
-```
-
-Fragment view however has createView, viewCreated, start, resume, pause, stop, destroyView. Fragments can be retained in backstack, but the view is not, so the view is created before its presented to the user and destroyed as soon as its not needed to conserve memory. Fragment binding should be created in `onCreateView` and cleared in `onDestroyView`
-
-```
-private var _binding: FragmentMyBinding? = null
-private val binding get() = _binding!!
-
-override fun onCreateView(...) {
-    _binding = FragmentMyBinding.inflate(inflater)
-    return binding.root
-}
-
-override fun onDestroyView() {
-    super.onDestroyView()
-    _binding = null
-}
-```
-
-Doing this instead is wrong
-
-```
-class MyFragment : Fragment() {
-    lateinit var binding: FragmentMyBinding
-
-    override fun onCreateView(...) {
-        binding = FragmentMyBinding.inflate(inflater)
-        return binding.root
-    }
-}
-```
-
-Fragments should use `viewLifecycleOwner` to observe flows or live data.
-
-```
-// Never do this. This will be tied to the Fragment lifecycle which will outlive the view and hence leak
-viewModel.data.observe(this) { ... }
-
-// Do this.
-viewModel.data.observe(viewLifecycleOwner) { ... }
-```
-
-A view model is a lifecycle aware state holder which survives configuration changes and is destroyed when the scope owner is destroyed. View model can be obtained using `by viewModels()` in activity and fragments and by using `by activityViewModel()` when using shared view model in fragments.
-
-```
-Activity created
- → ViewModel created
- → Rotation
- → Activity recreated
- → Same ViewModel reused
- → Activity finished
- → ViewModel cleared (onCleared)
-```
-
-There are few lifecycle aware APIs that are important. 
-- `repeatOnLifecycle`
-- `launchWhenStarted`
-- `viewLifecycleOwner.lifecycleScope`
-
-```
-viewLifecycleOwner.lifecycleScope.launch {
-    repeatOnLifecycle(Lifecycle.State.STARTED) {
-        viewModel.uiState.collect { state ->
-            render(state)
-        }
-    }
-}
-```
-This is create a block which is repeated on every start event on the lifecycle owner's lifecycle.
 
 ## Intents
 Intent is a message object which requests an action from another Android component. The component can be within an app or across apps. Intents can be used for starting activity, service or send a broadcast. Intent encapsulates action, data, type of data, flags, extras.
@@ -647,6 +650,7 @@ There are explicit intents, which call out the exact class to launch. This is us
 
 Here the action is SEND, category is default, data is text. So when that matches in a intent, the said activity is a candidate. If there are more candidates system provides a chooser. Categories are DEFAULT, BROWSABLE, LAUNCHER, APP_BROWSER, HOME, OPENABLE etc. System addes DEFAULT if none specified.
 
+### Pending Intents
 Pending intent is a token that grants another app or system permission to perform an action on your apps's behalf. These are used with notitications, alarms, widgets etc. Pending intent can also do the same things as an intent.
 
 ```
@@ -665,8 +669,10 @@ Pending intents run with your app's permission, even if your app is not running 
 
 As a guideline, always use explicit intents for internal actions. Minimize implicit intents as other apps can intercept. 
 
-Intent filters are used for deeplinking. 
+### Intent filters
+Intent filters are used for capturing specific intents. They are used for intent handling, deeplinking, receivers etc. 
 
+Deeplink example:
 ```
 <intent-filter>
     <action android:name="android.intent.action.VIEW"/>
@@ -709,6 +715,10 @@ Receiver's lifecycle is very simple. It cannot do any long tasks, or async tasks
 
 The security issue with broadcasts is that other apps can imitate them. So its better to use explicity intents (implicit ones are easy to generate), receivers should be protected with permissions.
 
+### Services - Bound and unbound
+
+### Work managers
+
 ## Offline support
 - Database - SQLite (other options?)
 - Shared prefs
@@ -727,17 +737,10 @@ Location
 Camera
 Bluetooth?
 Network / wifi & 4G
-Broadcast receivers
 
-### Work managers
-
-### Services - Bound and unbound
 
 ### APK structure
 - Bundles / flavors etc
-
-### Binder / IPC
-How to build a separate telemetry / logging APK that can be reused as a service across multuple apps?
 
 ### Doze mode
 Doze mode is an aggressive battery saving state introduced in Android 6. Doze mode progresses from Light to Deep. First when screen of off - no doze yet. Device is stationary -> light doze mode. Then after some time it enters deep doze where CPU sleeps most of the time, network is blocked, work deferred and only maintenance window work happens every 10 - 30 mins (increasing gaps). During this time Android wakes up breifly, runs pending jobs, delivers queued notifications, allows app to sync, re-enters doze mode.
