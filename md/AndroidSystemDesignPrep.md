@@ -435,13 +435,244 @@ server responds
 
 ### Media handling
 
+ExoPlayer is the default choice when it comes to streaming media. Most apps like Youtube, Instagram, Spotify, Netflix, Teams etc use it. It gives good control over buffering, adaptive streaming, track selection, caching and [DRM](#drm-digital-rights-management). 
+
+Client side should handle buffering, decoding, playback, caching, track switching, errors etc.
+
+```
+// Simple setup for ExoPlayer
+val player = ExoPlayer.Builder(context).build()
+val mediaItem = MediaItem.fromUri(url)
+player.setMediaItem(mediaItem)
+player.prepare()
+player.play()
+
+// Buffering control
+LoadControl.Builder()
+    .setBufferDurationsMs(
+        minBufferMs = 15_000,
+        maxBufferMs = 50_000,
+        bufferForPlaybackMs = 2_000,
+        bufferForPlaybackAfterRebufferMs = 3_000
+    )
+```
+
+MediaPlayer (old tech) supports progressive streaming of MP4 files and HLS streaming. For details on streaming protocols, refer [this section](#streaming-protocols).
+
+#### HTTP progressive streaming
+Client does range requests (HTTP 206) and reads from byte offsets as needed. This works without any server intelligence, it just needs to support range requests. Most web servers support this. More [details here](#http-progressive-streaming).
+
+```
+GET /video.mp4
+Range: bytes=100000-200000
+```
+
+#### HLS / DASH
+For this backend should support video encoding into multiple qualities: 1080p, 720p, 480p etc. It needs to break the video into segments and provide a manifest. We will explore streaming backend technologies in [detail](#hls--dash).
+
+## Android lifecycle and lifecycle components
+Need for lifecycle - Android apps run on resource-constrained devices. They compete with other apps. They can be killed and relaunched several times. Lifecycle provides clear hook points for allocating resource at the right time, releasing them, setting up and tearing down UI etc. 
+
+The entire app has a lifecycle which can be obtained from `ProcessLifecyleOwner.get().getLifecycle()`. It's ON_CREATE is dispached exactly once and ON_START, ON_RESUME events are dispatched as the first activity moves through these events. ON_STOP, ON_PAUSE as last activity moves through these events, with a delay (long enough to handle configuration changes cases). These are useful for tracking when app is coming to foreground and background.
+
+Activity also goes through the lifecycle of create, start, resume (when app is ready to interact), pause, stop and destroy. When configuration change happens app goes through pause, stop and destroy and then immediately activity is launched which causes create, start and resume.
+
+Fragment has two lifecycles. One is for fragment instance which goes through attach, create, destroy and detach. When the fragment object is created and attached to an activity `onAttach` and `onCreate` are called. Fragment can survive configuration changes if its retained by `FragmentManager`. A `FragmentManager` is associated with an Activity or a Fragment. It can have child managers if there are nested Fragments in Activities. It manages fragments, track which fragments exist, which are visible, execute fragment transactions, manage back stack, drive the fragment lifecycle. 
+
+FragmentManager during config change, stores the fragment class names, arguments and save state bundles and restore them after activity is created and a new fragment manager is created. This is why Fragments need empty constructor and no assumptions or state apart from those saved in saved state bundles.
+
+```
+// Hypothetical and simplified
+class FragmentManager {
+  // contains all instances of fragments known to manager. They can be visible, hidden, detached, back stacked.
+  val fragmentStore: Map<FragmentId, Fragment>
+  // Subset, active fragments - only fragments attached to UI
+  val addedFragments: List<Fragment>
+  // A BackStackRecord is a frozen record of a bunch of operations commited via FragmentTransactions.
+  val backstack: Stack<BackStackRecord>
+
+  // Async, execute all transactions queued in next main-loop cycle.
+  fun commit()
+
+  // Execute immediatey all transactions queued in next main-loop cycle. Not recommended
+  fun commitNow()
+
+  // Forces all queued transactions to run immediately, not recommended.
+  fun executePendingTransactions()
+}
+
+class FragmentTransaction {
+  val fragment: Fragment
+  val op: List<Op> // add, remove, show, hide, addToBackstack etc.
+}
+```
+
+Fragment view however has createView, viewCreated, start, resume, pause, stop, destroyView. Fragments can be retained in backstack, but the view is not, so the view is created before its presented to the user and destroyed as soon as its not needed to conserve memory. Fragment binding should be created in `onCreateView` and cleared in `onDestroyView`
+
+```
+private var _binding: FragmentMyBinding? = null
+private val binding get() = _binding!!
+
+override fun onCreateView(...) {
+    _binding = FragmentMyBinding.inflate(inflater)
+    return binding.root
+}
+
+override fun onDestroyView() {
+    super.onDestroyView()
+    _binding = null
+}
+```
+
+Doing this instead is wrong
+
+```
+class MyFragment : Fragment() {
+    lateinit var binding: FragmentMyBinding
+
+    override fun onCreateView(...) {
+        binding = FragmentMyBinding.inflate(inflater)
+        return binding.root
+    }
+}
+```
+
+Fragments should use `viewLifecycleOwner` to observe flows or live data.
+
+```
+// Never do this. This will be tied to the Fragment lifecycle which will outlive the view and hence leak
+viewModel.data.observe(this) { ... }
+
+// Do this.
+viewModel.data.observe(viewLifecycleOwner) { ... }
+```
+
+A view model is a lifecycle aware state holder which survives configuration changes and is destroyed when the scope owner is destroyed. View model can be obtained using `by viewModels()` in activity and fragments and by using `by activityViewModel()` when using shared view model in fragments.
+
+```
+Activity created
+ → ViewModel created
+ → Rotation
+ → Activity recreated
+ → Same ViewModel reused
+ → Activity finished
+ → ViewModel cleared (onCleared)
+```
+
+There are few lifecycle aware APIs that are important. 
+- `repeatOnLifecycle`
+- `launchWhenStarted`
+- `viewLifecycleOwner.lifecycleScope`
+
+```
+viewLifecycleOwner.lifecycleScope.launch {
+    repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.uiState.collect { state ->
+            render(state)
+        }
+    }
+}
+```
+This is create a block which is repeated on every start event on the lifecycle owner's lifecycle.
+
+## Intents
+Intent is a message object which requests an action from another Android component. The component can be within an app or across apps. Intents can be used for starting activity, service or send a broadcast. Intent encapsulates action, data, type of data, flags, extras.
+
+```
+Intent(Intent.ACTION_VIEW).apply {
+    data = Uri.parse("https://example.com")
+    putExtra("source", "notification")
+}
+```
+
+There are explicit intents, which call out the exact class to launch. This is used within the same app and its safe. There are implicit intents which just tells what to do, but does not specify who should do it. It just provides the action and data + extras. These are resolved using intent filters. Intent filters are defined in the manifest, which tells each component what it can handle and what it expects.
+
+```
+<activity android:name=".ShareActivity">
+    <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="text/plain"/>
+    </intent-filter>
+</activity>
+```
+
+Here the action is SEND, category is default, data is text. So when that matches in a intent, the said activity is a candidate. If there are more candidates system provides a chooser. (#*#* what are categories) Categories are DEFAULT, BROWSABLE, LAUNCHER. System addes DEFAULT if none specified.
+
+Pending intent is a token that grants another app or system permission to perform an action on your apps's behalf. These are used with notitications, alarms, widgets etc. Pending intent can also do the same things as an intent.
+
+```
+val intent = Intent(this, DetailActivity::class.java)
+val pendingIntent = PendingIntent.getActivity(
+    this,
+    0,
+    intent,
+    PendingIntent.FLAG_IMMUTABLE
+)
+
+notificationBuilder.setContentIntent(pendingIntent)
+```
+
+Pending intents run with your app's permission, even if your app is not running and can be fired by other apps. So there can be immutable and mutable pending intents. Immutable ones are more safe. Mutable ones allow the intent to be modified before firing (examples inline reply, bubbles etc.)
+
+As a guideline, always use explicit intents for internal actions. Minimize implicit intents as other apps can intercept. 
+
+Intent filters are used for deeplinking. 
+
+```
+<intent-filter>
+    <action android:name="android.intent.action.VIEW"/>
+    <category android:name="android.intent.category.BROWSABLE"/>
+    <category android:name="android.intent.category.DEFAULT"/>
+    <data android:scheme="https" android:host="example.com"/>
+</intent-filter>
+
+This can allow your app to be opened using https://example.com/product/123
+```
+
+## Broadcasts and Receivers
+Broadcast is a system-wide message sent as an intent. They are async and decoupled. It follows typical messaging paradigm within the Android mobile ecosystem.
+
+A broadcast receiver is a component that listents for broadcasts and executes logic matching the broadcast. We can think of them as subscribers to the broadcast.
+
+In general, use of custom broadcasts and receivers should be minimal as we use live data / flow etc. We can still use it for some important system level broadcasts if needed. Typically we still use it for BOOT_COMPLETED, SMS_RECEIVED, PACKAGE_UPDATED etc. For things like network connectivity, battery, app foreground / background etc, we have respective managers such as NetworkManager, BatteryManager, ProcessLifecycleOwner etc.
+
+A typical example. Every receiver is instantiated and its `onReceive` method is called and then its destroyed.
+```
+System
+  └── sendBroadcast(Intent(ACTION_BATTERY_LOW))
+        ├── App A Receiver
+        ├── App B Receiver
+        └── App C Receiver
+```
+
+Recievers also use intent filters to narrow down the broadcasts which it wants to handle. So it matches the action, category and data. 
+
+There are three types of broadcasts. First one is a system broadcast, which informs about battery condition, booting up etc. Second is the app boardcasts, which are sent by apps to other apps. Third is a local broadcast which is now deprecated and replaced by LiveData / Flow / event buses.
+
+Broadcast receivers are of two types. First one is manifest driven, which can receive broadcasts when app is not running. This can be used to listen to system events like SMS_RECIEVED, BOOT_COMPLETED etc. What can be listened to in manifest are limited to system level and some key broadcasts. The second type is dynamic receiver which is registered in code. This is active only when app is alive and this is preferred in modern apps.
+```
+registerReceiver(receiver, IntentFilter(ACTION))
+```
+
+Receiver's lifecycle is very simple. It cannot do any long tasks, or async tasks. It can delegate to WorkManager or services.
+
+`Create → onReceive() → Destroy`
+
+The security issue with broadcasts is that other apps can imitate them. So its better to use explicity intents (implicit ones are easy to generate), receivers should be protected with permissions.
+
+## Offline support
+- Database - SQLite (other options?)
+- Shared prefs
+- Disk storage (files)
+- Key store or secure storage
+
+When to use what
+Need details about schema, primary keys, relations, indices
+How to encrypt DB? - Specific columns or entire DB?
+Encryption methods - Key based - what key to use, how to encryt and decrypt - What algo to use etc.
+
 ## Deeper Android
-Lifecycle
-Lifecycle components
-Jetpack libraries - most important ones
-Offline
-Intent and Intent filters
-Pending intent
 Permissions management
 Battery life 
 Location
@@ -464,17 +695,6 @@ How to build a separate telemetry / logging APK that can be reused as a service 
 Doze mode is an aggressive battery saving state introduced in Android 6. Doze mode progresses from Light to Deep. First when screen of off - no doze yet. Device is stationary -> light doze mode. Then after some time it enters deep doze where CPU sleeps most of the time, network is blocked, work deferred and only maintenance window work happens every 10 - 30 mins (increasing gaps). During this time Android wakes up breifly, runs pending jobs, delivers queued notifications, allows app to sync, re-enters doze mode.
 
 Foreground apps, services, high priority push notifications FCM, System apps such as clock etc are only allowed. There is a maintenance window concept when background tasks are allowed in a short burst every few minutes. Alarms set using `setAndAllowWhileIdle()` kind of API are allowed.
-
-## Offline support
-- Database - SQLite (other options?)
-- Shared prefs
-- Disk storage (files)
-- Key store or secure storage
-
-When to use what
-Need details about schema, primary keys, relations, indices
-How to encrypt DB? - Specific columns or entire DB?
-Encryption methods - Key based - what key to use, how to encryt and decrypt - What algo to use etc.
 
 
 ## Security
@@ -726,7 +946,7 @@ service UserService {
 }
 ```
 
-gRPC recommends to design the schema so that there are no removals or fields or reuse of field numbers or changing the meaning or type of the field. We can however add new fields, change field name (keeping the field number same), change the defaul values, adding new RPC methods or even deprecating fields.
+gRPC recommends to design the schema so that there are no removals or fields or reuse of field numbers or changing the meaning or type of the field. We can however add new fields, change field name (keeping the field number same), change the defaul values, adding new RPC methods or even deprecating fields. It is also recommended not to have required fields.
 
 
 ### MQTT
@@ -793,7 +1013,131 @@ If one wants to access BLE device from their app, they should start off with ask
 | HTTP/1 only for upgrade,<br> TLS + TCP <br> No HTTP/2 (No upgrade) <br> No HTTP/3 (has WebTransport)  | HTTP/1/2 | HTTP 1/2/3 <br> WebSocket or SSE for subscription | HTTP/2 only | TCP - Implements own TLS |
 
 ## Streaming protocols
+Streaming is a very important aspect of mobile apps as there are several use cases to play videos, which are high quality and large, over variable network quality, instant start up, multiple qualities (240p to 1080p), with features such as audio + video + subtitles, seek, live stream, [DRM](#drm-digital-rights-management) / encryption and offlining capabilities.
 
+Basic option is MP4 over HTTP and that solves some of these problems. But there are more streaming focused protocols available which are highly efficient and powerful to cater to all these requirements.
+
+Let us understand the core building blocks of streaming.
+
+1. Segmentation - Media split into small chunks, 2 - 10 seconds typically. Each chunk is independently decodable. 
+1. Manifest - Details about available qualities, segment URLs, timing information, audio and subtitle tracks
+1. Adaptive Bitrate - Ability of the client to switch quality based on bandwidth, buffer health and CPU
+1. Stateless - Segments are sent over plain HTTP, which makes it CDN friendly, cacheable and scalable.
+
+Now let's look at various Streaming protocols:
+
+### Progressive download
+This is a single MP4 file with HTTP range requests. 
+```
+GET video.mp4
+Range: bytes=100000-200000
+```
+This is an extremely simple setup which does not require any special server setup. Its supported by web servers over HTTP.
+This does not provide adaptive bitrate, no live streaming, no track switching and poor seeking for large files.
+From a mobile perspective, it is good for short videos (feeds, reel) or for simple playback. It does not scale for larger videos and unstable network conditions.
+
+### HLS (HTTP Live Streaming) - Apple standard
+This is a segment-based adaptive streaming. It uses .m3u8 as a manifest. 
+```
+master.m3u8
+ ├─ 1080p.m3u8 → seg1.ts, seg2.ts...
+ ├─ 720p.m3u8
+ └─ 480p.m3u8
+```
+This is good for mobile use cases in general. It works over HTTP, supports live streaming, CDN and DRM.
+The downsides of this are higher latency (improved with LL-HLS) and has slightly more overhead compared to DASH
+Not ideal for live events.
+
+#### LL-HLS (Low latency HLS)
+Reduced latency, used by Apple, Youtube Live, sports apps.
+
+### MPEG-DASH (Dynamic Adaptive Streaming over HTTP)
+This is based on open standard and has better codec flexibility, efficient ABR and strong DRM support. It uses `mpd` manifest file
+The downside is that safari does not support it natively. So its an issue with iOS Safari without player apps. It works well for Android and ExpoPlayer.
+```
+manifest.mpd
+ ├─ video 1080p segments
+ ├─ video 720p segments
+ ├─ audio tracks
+ └─ subtitles
+```
+Not ideal for live events.
+
+#### LL-DASH (Low latency DASH)
+Similar goal as LL-HLS. Supported by ExpoPlayer.
+
+### WebRTC (Real Time Streaming)
+This is real time peer-to-peer streaming using UDP over a persistent connection. It has ultra low latency and two way communication. 
+This is not CDN friendly and involves complex signaling and poor scalabilty. This is good for video calls and live interactions. It does not support ABR. WebRTC uses RTP under the hoods.
+
+#### RTP (Realtime Transfer Protocol)
+This is a low-level protocol aimed at solving realtime streaming. This uses UDP and thus does not provide any realibility standards. This works by transferring raw media frames or compressed packets (does not work with files or segments). Its ideal for VoIP, video calls, conferencing. 
+
+### RTMP (Real-Time Messaging Protocol)
+This is a powerful low latency live streaming protocol which runs over a persistent TCP connection. It sends audio / video, control messages and metadata. This was historically used in Flash players. It does not support CDN or ABR. Mobile do not have support for this playback. 
+
+Now this is not used in playback anymore. But its still used in ingestion.
+
+```
+Camera / OBS / Mobile App
+   ↓ RTMP
+Ingest Server
+   ↓ Transcode
+HLS / DASH
+   ↓
+CDN
+   ↓
+Mobile / Web players
+```
+
+Many platforms such as Youtube Live, Facebook live, Twitch, Instagram Live etc use this for sending the camera feed over to the server. Futher for playback it uses HLS / DASH
+
+## DRM (Digital Rights Management)
+DRM stands to protect premium media content from unauthorized copying, screen recording, downloading etc. Media with DRM is encrypted. Only authorized apps can decrypt it. 
+
+```
+Encrypted media (segments)
+        ↓
+   License server
+        ↓
+ Decryption keys
+        ↓
+ Trusted device hardware
+```
+
+Common DRM systems:
+```
+| Platform | DRM |
+|-|-|
+| Android        | Widevine  |
+| iOS / Safari   | FairPlay  |
+| Edge / Windows | PlayReady |
+```
+
+Common workflow:
+```
+User presses play
+   ↓
+App requests media manifest (HLS/DASH)
+   ↓
+Manifest references encrypted segments
+   ↓
+Player detects DRM info
+   ↓
+Player requests license
+   ↓
+License server validates user & device
+   ↓
+License (keys) returned
+   ↓
+Player decrypts segments
+   ↓
+Playback starts
+```
+
+The license server decides who can play what. License request needs device information, user auth token, DRM challenge, content ID. License response includes encrypted keys and playback rules (expiry, offline allowed etc.) The keys sent are encrypted using public key that is generated per device and is provisined once during the device manufacturing, stored in TEE (Trust Execution Environment) which is special secured hardware on the device (which runs separate from Android with its own mini OS). 
+
+Offline playback is supported where app downloads encrypted segments. Segments are always encrypted at rest. App requests for an offline license and the key is stored in secure store. Playback works until the key expires. 
 
 ## HTTP
 
