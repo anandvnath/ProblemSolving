@@ -52,6 +52,59 @@ Executors manage pools of threads
 Dispatchers choose executors or loopers
 Coroutines split execution into resumable pieces
 ```
+
+## Binder IPC
+Binder is Android's custom IPC mechanism, implemented partly in the Linux kernel and partly in user libs. The key idea is to make cross-process call feel like local calls, while enforcing process isolation and security. Binder object is a reference of an object that can receive method calls across process boundaries. In the server process, it is the actual implementation (`IBinder` implementation), at the client side it is the proxy. Kernel driver takes care of communication between server and client.
+
+```
+App code (Java / Kotlin)
+↓
+Binder framework (android.os.Binder, IBinder)
+↓
+Binder native layer (libbinder)
+↓
+Binder kernel driver (/dev/binder)
+```
+
+The kernel driver helps by creating copy of data between the processes, managing the object references and enforcing security boundaries. All framework IPC uses binder including `startActivity`, `startService`, system services, content providers etc. 
+
+Binder IPC's server side is _a process that owns a Binder object and exposes it to other process_. This is how to expose the service, which makes the service discoverable, defines how the process can be bound by a client. The service `TelemetryService` exposes a `Service` that return a `Binder`.
+```
+<!-- This is for exposing a service that can be bound by other processes -->
+<service
+    android:name=".TelemetryService"
+    android:exported="true"
+    android:permission="com.example.permission.TELEMETRY_BIND">
+    <intent-filter>
+        <action android:name="com.example.TELEMETRY_SERVICE" />
+    </intent-filter>
+</service>
+
+<!-- OR from the same APK, if you want to host the service in a separate process -->
+<service android:name=".app.MessengerService"
+         android:process=":remote" />
+```
+
+Client needs to create a `ServiceConnection` in order to bind to a service and obtain the binder object (`IBinder` instance). `bindService(intent, connection, BIND_AUTO_CREATE)` call initiates the connection. At this point AMS receives bind request, It resolves the service via manifest and starts the service process if needed. The service lifecycle `onCreate()` and `onBind(Intent)` is called which returns the `IBinder` remote instance. This gets returned to the `ServiceConnection.onServiceConnected(componentName, binderService)` method. Now the connections is established and both sides can talk. The data transfer between the client and server is using `Parcel` objects. `Parcel` is a highly optimized Android-specific serialization format. Its faster than Serializable and other reflection based approaches. 
+
+Binder IPC is synchronous by default. That is why they should not use UI threads. `IBinder` has `transact` method which is typically called by the client and then that results in `onTransact` method being invoked in the server side `Binder` instance. `transact` is called with `Parcel` instances for `data` (input Parcel) and `reply` (output Parcel), `onTransact` receives these and updates its answer into `reply` Parcel
+
+Summary
+```
+AIDL → code generator
+Binder → IPC mechanism
+Parcel → serialization format
+Kernel driver → isolation + data transfer
+```
+
+### AIDL
+AIDL is code generator which generates proxy and stub classes, serializes method arguments and dispatches calls over Binder.  It helps in generating the stub and skeleton based on an interface that is declared in aidl file. Whenever gradle sees an *.aidl file, it runs the tooling and generates the stub and skeleton. Now these can be used to implement the service on server side and connecting to the service on the client side. All this can be done by hand, but AIDL just makes this easy for us. 
+
+If there is a requirement to share the same service across multiple apps, we can create a shared module which contains the AIDL files and then deliver it as dependency to the server side APK and all the client side APKs, so that they are in sync.
+
+### Central telemetry service
+One example usage is to buid a central telemetry/logging engine, used by multiple apps, running in its own process, minimizing memory, CPU, and battery, high-throughput, safe, and resilient. Binder IPC is correct fit. Other options are shared lib - not suitable because we do not want multiple instances of code to run, files - File IO is show and contention heavy, content provider - content providers are req/ resp oriented, hard to enforce backpressures. The telemetry should be created as a separate APK that has a exported bound service, other apps can bind to it. One way AIDL is better suited here. Binder server side will simple queue the payload and let a worker thread pool handle the actual logging. This way it will be scalable. The service should implement details like rate limiting per UID / PID, by dropping debug logs in fav or error logs or by creating batches. If the telemetry process dies, the binder automatically reconnects, clients should rebind. So the logs can be buffered in the app for a breif period.
+
 ## Android lifecycle and lifecycle components
 Need for lifecycle - Android apps run on resource-constrained devices. They compete with other apps. They can be killed and relaunched several times. Lifecycle provides clear hook points for allocating resource at the right time, releasing them, setting up and tearing down UI etc. 
 
@@ -156,9 +209,6 @@ viewLifecycleOwner.lifecycleScope.launch {
 }
 ```
 This is create a block which is repeated on every start event on the lifecycle owner's lifecycle.
-
-### Binder / IPC
-How to build a separate telemetry / logging APK that can be reused as a service across multuple apps?
 
 ## UI patterns
 ### MVVM 
@@ -718,6 +768,8 @@ The security issue with broadcasts is that other apps can imitate them. So its b
 ### Services - Bound and unbound
 
 ### Work managers
+
+### Content provider
 
 ## Offline support
 - Database - SQLite (other options?)
